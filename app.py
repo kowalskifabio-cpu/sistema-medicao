@@ -6,7 +6,7 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO ---
 # COLE AQUI O LINK QUE VOCÊ COPIOU NO PASSO 2 ENTRE AS ASPAS:
-URL_DO_APPS_SCRIPT = "COLE_AQUI_A_URL_DO_PASSO_2_ITEM_9"
+URL_DO_APPS_SCRIPT = "https://script.google.com/macros/s/AKfycbzgnCmVZURdpN6LF54lYWyNSeVLvV36FQwB9DMSa2_lEF8Nm-lsvYzv_qmqibe-hcRp/exec"
 TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Medição Full-Stack", layout="wide")
