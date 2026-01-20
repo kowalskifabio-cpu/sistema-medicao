@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÕES ---
-URL_DO_APPS_SCRIPT = "SUA_URL_AQUI"
+URL_DO_APPS_SCRIPT = "https://script.google.com/macros/s/AKfycbzgnCmVZURdpN6LF54lYWyNSeVLvV36FQwB9DMSa2_lEF8Nm-lsvYzv_qmqibe-hcRp/exec"
 TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Sistema de Medição", layout="wide")
