@@ -1,2 +1,4 @@
-# sistema-medicao
-sistema-medicao
+streamlit
+pandas
+requests
+plotly
