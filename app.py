@@ -49,29 +49,54 @@ if escolha == "Contratos":
     df_c = carregar_dados("get_contracts")
     st.dataframe(df_c)
 
-# --- PÁGINA: ITENS ---
+# --- PÁGINA: ITENS (COM EDIÇÃO) ---
 elif escolha == "Itens":
     st.title("🏗️ Itens do Contrato")
     df_c = carregar_dados("get_contracts")
+    
     if not df_c.empty:
+        # 1. Seleção do Contrato
         lista_ctts = df_c['ctt'].tolist()
-        escolha_ctt = st.selectbox("Selecione o Contrato", lista_ctts)
+        escolha_ctt = st.selectbox("Selecione o Contrato para ver/editar itens", lista_ctts)
         id_ctt = df_c[df_c['ctt'] == escolha_ctt]['contract_id'].values[0]
 
-        with st.form("form_itens"):
-            desc = st.text_input("Descrição do Item")
-            vlr_u = st.number_input("Valor Unitário", min_value=0.0)
-            if st.form_submit_button("Adicionar Item"):
-                salvar_dados("items", {
-                    "item_id": str(uuid.uuid4()), "contract_id": id_ctt,
-                    "descricao_item": desc, "vlr_unit": vlr_u
-                })
-                st.success("Item adicionado!")
-        
+        # 2. Formulário para NOVO ITEM
+        with st.expander("➕ Cadastrar Novo Item"):
+            with st.form("novo_item"):
+                desc_n = st.text_input("Descrição do Item")
+                vlr_n = st.number_input("Valor Unitário", min_value=0.0, format="%.2f")
+                if st.form_submit_button("Salvar Novo"):
+                    salvar_dados("items", {"item_id": str(uuid.uuid4()), "contract_id": id_ctt, "descricao_item": desc_n, "vlr_unit": vlr_n})
+                    st.success("Item criado!")
+                    st.rerun()
+
+        # 3. Lista de Itens com BOTÃO DE EDITAR
         st.subheader("Itens Cadastrados")
         df_i = carregar_dados("get_items")
+        
         if not df_i.empty:
-            st.dataframe(df_i[df_i['contract_id'] == id_ctt])
+            itens_filtrados = df_i[df_i['contract_id'] == id_ctt]
+            
+            for index, row in itens_filtrados.iterrows():
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    # Campos que você circulou em vermelho agora são inputs individuais
+                    nova_desc = col1.text_input("Descrição", value=row['descricao_item'], key=f"desc_{row['item_id']}")
+                    novo_vlr = col2.number_input("Valor Unit.", value=float(row['vlr_unit']), key=f"vlr_{row['item_id']}")
+                    
+                    if col3.button("💾 Salvar Alteração", key=f"btn_{row['item_id']}"):
+                        payload = {
+                            "token": TOKEN,
+                            "action": "update",
+                            "table": "items",
+                            "id_field": "item_id",
+                            "id_value": row['item_id'],
+                            "data": {"descricao_item": nova_desc, "vlr_unit": novo_vlr}
+                        }
+                        requests.post(URL_DO_APPS_SCRIPT, json=payload)
+                        st.success("Alterado com sucesso!")
+                        st.rerun()
     else:
         st.warning("Cadastre um contrato primeiro.")
 
