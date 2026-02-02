@@ -4,32 +4,32 @@ import requests
 import uuid
 from datetime import datetime
 
-# --- 1. CONFIGURAÇÕES ---
-# COLE SUA URL DO APPS SCRIPT (TERMINADA EM /exec) ENTRE AS ASPAS ABAIXO:
-URL_DO_APPS_SCRIPT = "https://script.google.com/macros/s/AKfycbzgnCmVZURdpN6LF54lYWyNSeVLvV36FQwB9DMSa2_lEF8Nm-lsvYzv_qmqibe-hcRp/exec"
+# --- 1. CONFIGURAÇÕES (RECUPERE O QUE VOCÊ ACHOU NO APPS SCRIPT) ---
+URL_DO_APPS_SCRIPT = "https://script.google.com/macros/s/AKfycbzgnCmVZURdpN6LF54lYWyNSeVLvV36FQwB9DMSa2_lEF8Nm-lsvYzv_qmqibe-hcRp/exec" 
 TOKEN = "CHAVE_SEGURA_123"
 
-st.set_page_config(page_title="Sistema de Medição Pro", layout="wide")
+st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
-# --- 2. FUNÇÕES DE SUPORTE (DATA E MOEDA) ---
+# --- 2. FERRAMENTAS DE TRADUÇÃO ---
 
 def formatar_real(valor):
+    """Exemplo: 4430.11 -> R$ 4.430,11"""
     try:
         return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except: return "R$ 0,00"
 
 def formatar_data_br(data_str):
+    """Exemplo: 2025-11-01 -> 01/11/2025"""
     try:
         return pd.to_datetime(data_str).strftime('%d/%m/%Y')
     except: return data_str
 
 def calcular_status_prazo(data_fim_contrato, data_medicao, percentual):
-    """Lógica do Semáforo: Verde (Adiantado), Amarelo (No prazo), Vermelho (Atrasado)"""
+    """Sinalização Visual: Verde, Amarelo ou Vermelho"""
     try:
         hoje = datetime.now().date()
         fim = pd.to_datetime(data_fim_contrato).date()
         med = pd.to_datetime(data_medicao).date()
-        # Se 100%, usa a data da medição. Se não, usa 'hoje' para ver se já atrasou.
         ref = med if float(percentual) >= 1 else hoje
         dif = (fim - ref).days
         if dif > 0: return f"{dif} dias adiantado", "🟢"
@@ -39,7 +39,7 @@ def calcular_status_prazo(data_fim_contrato, data_medicao, percentual):
 
 def carregar_dados(acao):
     try:
-        r = requests.get(URL_DO_APPS_SCRIPT, params={"token": TOKEN, "action": acao})
+        r = requests.get(URL_DO_APPS_SCRIPT, params={"token": TOKEN, "action": acao}, timeout=15)
         return pd.DataFrame(r.json()) if r.status_code == 200 else pd.DataFrame()
     except: return pd.DataFrame()
 
@@ -49,10 +49,10 @@ def salvar_dados(tabela, dados, acao="create", id_field=None, id_value=None):
 
 # --- 3. MENU LATERAL ---
 st.sidebar.title("Navegação")
-menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição"]
+menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD FINANCEIRO (MODELO ANEXO I) ---
+# --- 4. PÁGINA: DASHBOARD (COM RETENÇÃO DE 15%) ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts")
@@ -60,7 +60,7 @@ if escolha == "Dashboard":
     df_m = carregar_dados("get_measurements")
     
     if not df_c.empty:
-        # Totais no Topo
+        # Totais Gerais no Topo
         t_con = pd.to_numeric(df_c['valor_contrato']).sum()
         t_med = pd.to_numeric(df_m['valor_acumulado']).sum() if not df_m.empty else 0
         
@@ -75,10 +75,10 @@ if escolha == "Dashboard":
 
         for _, con in df_f.iterrows():
             cid = con['contract_id']
-            # Cálculos de Retenção e Líquido
+            # Cálculos Financeiros Individuais conforme Anexo I
             med_ctt = df_m[df_m['item_id'].isin(df_i[df_i['contract_id']==cid]['item_id'])] if not df_m.empty else pd.DataFrame()
             bruto = pd.to_numeric(med_ctt['valor_acumulado']).sum() if not med_ctt.empty else 0
-            retencao = bruto * 0.15 # Retenção de 15%
+            retencao = bruto * 0.15 
             liquido = bruto - retencao
             
             with st.container(border=True):
@@ -94,32 +94,67 @@ if escolha == "Dashboard":
                         rel = med_ctt.merge(df_i[['item_id', 'descricao_item', 'vlr_unit']], on='item_id')
                         rel['Status'] = rel.apply(lambda x: calcular_status_prazo(con['data_fim'], x['data_medicao'], x['percentual_acumulado']), axis=1)
                         
-                        # Colunas conforme Anexo I
                         st.table(pd.DataFrame({
                             'Item': rel['descricao_item'],
                             'Valor Unitário': rel['vlr_unit'].apply(formatar_real),
-                            'Medição Acumulada %': rel['percentual_acumulado'].apply(lambda x: f"{float(x)*100:.2f}%"),
-                            'Medição Acumulada R$': rel['valor_acumulado'].apply(formatar_real),
-                            'Data Inicial': formatar_data_br(con['data_inicio']),
-                            'Data Final (Real)': rel['data_medicao'].apply(formatar_data_br),
-                            'Status Prazo': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
+                            '% Acumulado': rel['percentual_acumulado'].apply(lambda x: f"{float(x)*100:.2f}%"),
+                            'Medição R$': rel['valor_acumulado'].apply(formatar_real),
+                            'Saldo Item': rel.apply(lambda x: formatar_real(float(x['vlr_unit']) - float(x['valor_acumulado'])), axis=1),
+                            'Data Final Real': rel['data_medicao'].apply(formatar_data_br),
+                            'Prazo': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
                         }))
                     else:
-                        st.info("Nenhuma medição encontrada.")
+                        st.info("Nenhuma medição encontrada para este contrato.")
 
-# --- PÁGINAS DE CADASTRO (MANTIDAS COM BOTÃO SUBMIT) ---
+# --- 5. PÁGINA: LANÇAR MEDIÇÃO (COM FILTRO DE CONTRATO REATIVADO) ---
+elif escolha == "Lançar Medição":
+    st.title("📏 Lançamento de Medição")
+    df_c = carregar_dados("get_contracts")
+    df_i = carregar_dados("get_items")
+    
+    if not df_c.empty:
+        # SELEÇÃO DO CONTRATO MÃE
+        lista_ctts = df_c['ctt'].tolist()
+        ctt_sel = st.selectbox("1. Selecione o Contrato", lista_ctts)
+        id_ctt = df_c[df_c['ctt'] == ctt_sel]['contract_id'].values[0]
+        
+        # FILTRO DOS ITENS DESSE CONTRATO
+        itens_filtrados = df_i[df_i['contract_id'] == id_ctt]
+        
+        if not itens_filtrados.empty:
+            itens_filtrados['display'] = itens_filtrados.apply(lambda x: f"{x['descricao_item']} ({formatar_real(x['vlr_unit'])})", axis=1)
+            item_sel = st.selectbox("2. Selecione o Item para Medir", itens_filtrados['display'].tolist())
+            row_i = itens_filtrados[itens_filtrados['display'] == item_sel].iloc[0]
+            
+            with st.form("form_medir_final"):
+                p = st.slider("Percentual Executado (%)", 0, 100, step=1) / 100
+                v_calc = p * float(row_i['vlr_unit'])
+                st.info(f"Valor a medir: {formatar_real(v_calc)}")
+                dt = st.date_input("Data da Medição")
+                f = st.selectbox("Status/Fase", ["Em execução", "Medição lançada", "Aprovado"])
+                
+                if st.form_submit_button("Registrar Medição"):
+                    salvar_dados("measurements", {
+                        "measurement_id": str(uuid.uuid4()), "item_id": row_i['item_id'], 
+                        "data_medicao": str(dt), "percentual_acumulado": p, 
+                        "valor_acumulado": v_calc, "fase_workflow": f, "updated_at": str(datetime.now())
+                    })
+                    st.success("Medição registrada!")
+                    st.rerun()
+        else:
+            st.warning("Este contrato ainda não tem itens cadastrados.")
+    else:
+        st.error("Nenhum contrato encontrado. Cadastre um contrato primeiro.")
+
+# --- OUTRAS PÁGINAS (CONTRATOS, ITENS, KANBAN) ---
 elif escolha == "Contratos":
     st.title("📄 Cadastro de Contratos")
     with st.form("f_con"):
         c1, c2 = st.columns(2)
-        ctt = c1.text_input("Número CTT")
-        forn = c2.text_input("Fornecedor")
-        gest = c1.text_input("Gestor")
-        vlr = c2.number_input("Valor Total", min_value=0.0)
-        d1, d2 = st.columns(2)
-        dt_i = d1.date_input("Data Início")
-        dt_f = d2.date_input("Data Final")
-        if st.form_submit_button("Salvar Contrato"):
+        ctt = c1.text_input("Número CTT"); forn = c2.text_input("Fornecedor")
+        gest = c1.text_input("Gestor"); vlr = c2.number_input("Valor Total", min_value=0.0)
+        dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
+        if st.form_submit_button("Salvar"):
             salvar_dados("contracts", {"contract_id": str(uuid.uuid4()), "ctt": ctt, "fornecedor": forn, "gestor": gest, "valor_contrato": vlr, "data_inicio": str(dt_i), "data_fim": str(dt_f)})
             st.rerun()
 
@@ -127,24 +162,10 @@ elif escolha == "Itens":
     st.title("🏗️ Gestão de Itens")
     df_c = carregar_dados("get_contracts")
     if not df_c.empty:
-        sel = st.selectbox("Selecione o Contrato", df_c['ctt'].tolist())
+        sel = st.selectbox("Contrato", df_c['ctt'].tolist())
         id_c = df_c[df_c['ctt'] == sel]['contract_id'].values[0]
         with st.form("f_item"):
-            desc = st.text_input("Descrição do Item")
-            v_u = st.number_input("Valor Unitário", min_value=0.0)
-            if st.form_submit_button("Adicionar Item"):
-                salvar_dados("items", {"item_id": str(uuid.uuid4()), "contract_id": id_c, "descricao_item": desc, "vlr_unit": v_u})
-                st.rerun()
-
-elif escolha == "Lançar Medição":
-    st.title("📏 Lançamento de Medição")
-    df_i = carregar_dados("get_items")
-    if not df_i.empty:
-        sel_i = st.selectbox("Selecione o Item", df_i['descricao_item'].tolist())
-        row = df_i[df_i['descricao_item'] == sel_i].iloc[0]
-        with st.form("f_med"):
-            p = st.slider("Percentual (%)", 0, 100) / 100
-            dt = st.date_input("Data da Medição")
-            if st.form_submit_button("Registrar"):
-                salvar_dados("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * float(row['vlr_unit']), "fase_workflow": "Aprovado", "updated_at": str(datetime.now())})
+            desc = st.text_input("Descrição"); vlr_u = st.number_input("Vlr Unitário", min_value=0.0)
+            if st.form_submit_button("Adicionar"):
+                salvar_dados("items", {"item_id": str(uuid.uuid4()), "contract_id": id_c, "descricao_item": desc, "vlr_unit": vlr_u})
                 st.rerun()
