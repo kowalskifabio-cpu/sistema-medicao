@@ -51,13 +51,12 @@ st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD (SINALIZAÇÃO + FINANCEIRO + BOTÃO DE DETALHE) ---
+# --- 4. PÁGINA: DASHBOARD (COM PROTEÇÃO CONTRA COLUNA AUSENTE) ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     
     if not df_c.empty:
-        # Métricas Gerais
         t_con = pd.to_numeric(df_c['valor_contrato']).sum()
         t_med = pd.to_numeric(df_m['valor_acumulado']).sum() if not df_m.empty else 0
         m1, m2, m3 = st.columns(3)
@@ -72,9 +71,13 @@ if escolha == "Dashboard":
         for _, con in df_f.iterrows():
             cid = con['contract_id']
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
+            
+            # PROTEÇÃO: Garante que a coluna de data do item exista
+            if not itens_con.empty and 'data_fim_item' not in itens_con.columns:
+                itens_con['data_fim_item'] = con['data_fim']
+            
             med_ctt = df_m[df_m['item_id'].isin(itens_con['item_id'].tolist())] if not df_m.empty and not itens_con.empty else pd.DataFrame()
             
-            # Farol Global
             atrasado = False
             if not med_ctt.empty:
                 rel_check = med_ctt.merge(itens_con[['item_id', 'data_fim_item']], on='item_id')
@@ -94,7 +97,6 @@ if escolha == "Dashboard":
                 f3.metric("Líquido (85%)", formatar_real(v_bruto*0.85))
                 f4.metric("Saldo Contrato", formatar_real(float(con['valor_contrato']) - v_bruto))
                 
-                # BOTÃO DE DETALHAMENTO (RESTAURADO)
                 if st.button(f"🔍 Detalhar Boletim {con['ctt']}", key=f"btn_det_{cid}", use_container_width=True):
                     if not med_ctt.empty:
                         rel = med_ctt.merge(itens_con[['item_id', 'descricao_item', 'vlr_unit', 'data_fim_item']], on='item_id')
@@ -106,7 +108,7 @@ if escolha == "Dashboard":
                             'Medido R$': rel['valor_acumulado'].apply(formatar_real),
                             'Prazo': rel['Data Limite'].apply(formatar_data_br), 'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
                         }))
-                    else: st.warning("Sem medições registradas para este contrato.")
+                    else: st.warning("Sem medições registradas.")
 
 # --- 5. ITENS (BUSCA, EDIÇÃO E EXCLUSÃO) ---
 elif escolha == "Itens":
@@ -125,6 +127,7 @@ elif escolha == "Itens":
                     st.rerun()
         if not df_i.empty:
             i_f = df_i[df_i['contract_id'] == row_ctt['contract_id']]
+            if 'data_fim_item' not in i_f.columns: i_f['data_fim_item'] = "-"
             busca = st.text_input("🔍 Pesquisar...")
             if busca: i_f = i_f[i_f['descricao_item'].str.contains(busca, case=False)]
             for _, item in i_f.iterrows():
@@ -164,11 +167,11 @@ elif escolha == "Lançar Medição":
                 if st.form_submit_button("Registrar"):
                     salvar_dados("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * float(row['vlr_unit']), "fase_workflow": "Medição lançada", "updated_at": str(datetime.now())})
                     st.rerun()
-            st.subheader("📋 Histórico deste Contrato")
+            st.subheader("📋 Histórico")
             if not df_m.empty:
                 st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])], use_container_width=True, height=250)
 
-# --- 7. KANBAN (COM IDENTIFICAÇÃO DO CONTRATO) ---
+# --- 7. KANBAN ---
 elif escolha == "Kanban":
     st.title("📋 Quadro Kanban")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -185,13 +188,11 @@ elif escolha == "Kanban":
                 for _, card in m_f[m_f['fase_workflow'] == f].iterrows():
                     item_row = df_i[df_i['item_id'] == card['item_id']]
                     if not item_row.empty:
-                        item_data = item_row.iloc[0]
-                        ctt_row = df_c[df_c['contract_id'] == item_data['contract_id']].iloc[0]
                         with st.container(border=True):
-                            st.write(f"**{item_data['descricao_item']}**")
-                            st.caption(f"📑 CTT: {ctt_row['ctt']}")
+                            st.write(f"**{item_row.iloc[0]['descricao_item']}**")
                             st.write(f"{float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
+# --- 8. CONTRATOS ---
 elif escolha == "Contratos":
     st.title("📄 Contratos")
     with st.form("f_con"):
