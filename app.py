@@ -12,7 +12,7 @@ st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
 # --- 2. FERRAMENTAS DE PERFORMANCE E TRADUÇÃO ---
 
-@st.cache_data(ttl=120) # Cache para acelerar a troca de telas
+@st.cache_data(ttl=60)
 def carregar_dados(acao):
     try:
         r = requests.get(URL_DO_APPS_SCRIPT, params={"token": TOKEN, "action": acao}, timeout=15)
@@ -31,29 +31,33 @@ def formatar_data_br(data_str):
 def salvar_dados(tabela, dados, acao="create", id_field=None, id_value=None):
     payload = {"token": TOKEN, "table": tabela, "data": dados, "action": acao, "id_field": id_field, "id_value": id_value}
     r = requests.post(URL_DO_APPS_SCRIPT, json=payload)
-    st.cache_data.clear() # Limpa o cache após salvar para atualizar as telas
+    st.cache_data.clear() 
     return r
 
-def verificar_atraso_item(data_fim, data_medicao, percentual):
+def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
     try:
         hoje = datetime.now().date()
         fim = pd.to_datetime(data_fim).date()
         med = pd.to_datetime(data_medicao).date()
         ref = med if float(percentual) >= 1 else hoje
-        return (fim - ref).days < 0
-    except: return False
+        dif = (fim - ref).days
+        if dif > 0: return f"{dif} dias adiantado", "🟢"
+        elif dif == 0: return "No prazo limite", "🟡"
+        else: return f"{abs(dif)} dias atrasado", "🔴"
+    except: return "Sem dados", "⚪"
 
 # --- 3. MENU LATERAL ---
 st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD (SINALIZAÇÃO E FINANCEIRO) ---
+# --- 4. DASHBOARD (SINALIZAÇÃO + FINANCEIRO + BOTÃO DE DETALHE) ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     
     if not df_c.empty:
+        # Métricas Gerais
         t_con = pd.to_numeric(df_c['valor_contrato']).sum()
         t_med = pd.to_numeric(df_m['valor_acumulado']).sum() if not df_m.empty else 0
         m1, m2, m3 = st.columns(3)
@@ -70,16 +74,16 @@ if escolha == "Dashboard":
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
             med_ctt = df_m[df_m['item_id'].isin(itens_con['item_id'].tolist())] if not df_m.empty and not itens_con.empty else pd.DataFrame()
             
-            contrato_atrasado = False
+            # Farol Global
+            atrasado = False
             if not med_ctt.empty:
-                if 'data_fim_item' not in itens_con.columns: itens_con['data_fim_item'] = con['data_fim']
                 rel_check = med_ctt.merge(itens_con[['item_id', 'data_fim_item']], on='item_id')
                 for _, r in rel_check.iterrows():
-                    d_limite = r['data_fim_item'] if not pd.isna(r['data_fim_item']) else con['data_fim']
-                    if verificar_atraso_item(d_limite, r['data_medicao'], r['percentual_acumulado']):
-                        contrato_atrasado = True; break
+                    d_fim = r['data_fim_item'] if not pd.isna(r['data_fim_item']) else con['data_fim']
+                    if (pd.to_datetime(d_fim).date() - datetime.now().date()).days < 0 and float(r['percentual_acumulado']) < 1:
+                        atrasado = True; break
             
-            farol = "🔴" if contrato_atrasado else "🟢"
+            farol = "🔴" if atrasado else "🟢"
             v_bruto = pd.to_numeric(med_ctt['valor_acumulado']).sum() if not med_ctt.empty else 0
             
             with st.container(border=True):
@@ -89,6 +93,20 @@ if escolha == "Dashboard":
                 f2.metric("Retenção (15%)", f"- {formatar_real(v_bruto*0.15)}", delta_color="inverse")
                 f3.metric("Líquido (85%)", formatar_real(v_bruto*0.85))
                 f4.metric("Saldo Contrato", formatar_real(float(con['valor_contrato']) - v_bruto))
+                
+                # BOTÃO DE DETALHAMENTO (RESTAURADO)
+                if st.button(f"🔍 Detalhar Boletim {con['ctt']}", key=f"btn_det_{cid}", use_container_width=True):
+                    if not med_ctt.empty:
+                        rel = med_ctt.merge(itens_con[['item_id', 'descricao_item', 'vlr_unit', 'data_fim_item']], on='item_id')
+                        rel['Data Limite'] = rel['data_fim_item'].fillna(con['data_fim'])
+                        rel['Status'] = rel.apply(lambda x: calcular_status_prazo_texto(x['Data Limite'], x['data_medicao'], x['percentual_acumulado']), axis=1)
+                        st.table(pd.DataFrame({
+                            'Item': rel['descricao_item'], 'Vlr Unit.': rel['vlr_unit'].apply(formatar_real),
+                            '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{float(x)*100:.2f}%"),
+                            'Medido R$': rel['valor_acumulado'].apply(formatar_real),
+                            'Prazo': rel['Data Limite'].apply(formatar_data_br), 'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
+                        }))
+                    else: st.warning("Sem medições registradas para este contrato.")
 
 # --- 5. ITENS (BUSCA, EDIÇÃO E EXCLUSÃO) ---
 elif escolha == "Itens":
@@ -122,7 +140,7 @@ elif escolha == "Itens":
                         salvar_dados("items", {}, "delete", "item_id", item['item_id'])
                         st.rerun()
 
-# --- 6. MEDIÇÃO (SLIDER INTELIGENTE + LISTA DE ROLAGEM) ---
+# --- 6. MEDIÇÃO (SLIDER + ROLAGEM) ---
 elif escolha == "Lançar Medição":
     st.title("📏 Lançamento de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -131,7 +149,7 @@ elif escolha == "Lançar Medição":
         id_c = df_c[df_c['ctt'] == c_sel]['contract_id'].values[0]
         i_f = df_i[df_i['contract_id'] == id_c].copy()
         if not i_f.empty:
-            b = st.text_input("🔍 Filtrar Itens..."); 
+            b = st.text_input("🔍 Filtrar..."); 
             if b: i_f = i_f[i_f['descricao_item'].str.contains(b, case=False)]
             i_f['display'] = i_f.apply(lambda x: f"{x['descricao_item']} ({formatar_real(x['vlr_unit'])})", axis=1)
             row = i_f[i_f['display'] == st.selectbox("Item", i_f['display'].tolist())].iloc[0]
@@ -148,10 +166,9 @@ elif escolha == "Lançar Medição":
                     st.rerun()
             st.subheader("📋 Histórico deste Contrato")
             if not df_m.empty:
-                # LISTA COM BARRA DE ROLAGEM
                 st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])], use_container_width=True, height=250)
 
-# --- 7. KANBAN (COM IDENTIFICAÇÃO DO CONTRATO NO CARD) ---
+# --- 7. KANBAN (COM IDENTIFICAÇÃO DO CONTRATO) ---
 elif escolha == "Kanban":
     st.title("📋 Quadro Kanban")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -172,7 +189,7 @@ elif escolha == "Kanban":
                         ctt_row = df_c[df_c['contract_id'] == item_data['contract_id']].iloc[0]
                         with st.container(border=True):
                             st.write(f"**{item_data['descricao_item']}**")
-                            st.caption(f"📑 CTT: {ctt_row['ctt']}") # Identificação do Contrato
+                            st.caption(f"📑 CTT: {ctt_row['ctt']}")
                             st.write(f"{float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
 elif escolha == "Contratos":
