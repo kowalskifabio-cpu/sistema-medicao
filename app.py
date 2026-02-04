@@ -10,22 +10,20 @@ TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
-# --- 2. FERRAMENTAS DE TRADUÇÃO (PADRÃO BRASILEIRO) ---
+# --- 2. FERRAMENTAS DE TRADUÇÃO ---
 
 def formatar_real(valor):
-    """Formata para o padrão brasileiro: R$ 1.234,56"""
     try:
         return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except: return "R$ 0,00"
 
 def formatar_data_br(data_str):
-    """Formata data ISO para DD/MM/AAAA"""
+    if pd.isna(data_str) or data_str == "": return "-"
     try:
         return pd.to_datetime(data_str).strftime('%d/%m/%Y')
-    except: return data_str
+    except: return str(data_str)
 
 def calcular_status_prazo(data_fim, data_medicao, percentual):
-    """Sinalização Visual: Verde, Amarelo ou Vermelho"""
     try:
         hoje = datetime.now().date()
         fim = pd.to_datetime(data_fim).date()
@@ -52,7 +50,7 @@ st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. PÁGINA: DASHBOARD ---
+# --- 4. DASHBOARD ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts")
@@ -91,6 +89,9 @@ if escolha == "Dashboard":
                 
                 if st.button(f"🔍 Detalhar Boletim {con['ctt']}", key=f"btn_{cid}", use_container_width=True):
                     if not med_ctt.empty:
+                        # Proteção para coluna de data no merge
+                        if 'data_fim_item' not in itens_con.columns: itens_con['data_fim_item'] = con['data_fim']
+                        
                         rel = med_ctt.merge(itens_con[['item_id', 'descricao_item', 'vlr_unit', 'data_fim_item']], on='item_id')
                         rel['Data Limite'] = rel['data_fim_item'].fillna(con['data_fim'])
                         rel['Status'] = rel.apply(lambda x: calcular_status_prazo(x['Data Limite'], x['data_medicao'], x['percentual_acumulado']), axis=1)
@@ -106,7 +107,7 @@ if escolha == "Dashboard":
                         st.table(rel_view)
                     else: st.warning("Nenhuma medição encontrada.")
 
-# --- 5. PÁGINA: ITENS (COM BUSCA E DATA INDIVIDUAL) ---
+# --- 5. PÁGINA: ITENS (CORREÇÃO DO ERRO) ---
 elif escolha == "Itens":
     st.title("🏗️ Gestão de Itens")
     df_c = carregar_dados("get_contracts")
@@ -118,77 +119,59 @@ elif escolha == "Itens":
             c1, c2 = st.columns([2,1])
             desc = c1.text_input("Descrição do Item")
             v_u = c2.number_input("Valor Unitário (R$)", min_value=0.0, format="%.2f")
-            
             dt_fim_default = pd.to_datetime(row_ctt['data_fim']).date()
-            dt_item = st.date_input("Data Fim do Item (Prazo Específico)", dt_fim_default, format="DD/MM/YYYY")
-            
+            dt_item = st.date_input("Data Fim do Item", dt_fim_default, format="DD/MM/YYYY")
             if st.form_submit_button("Adicionar Item"):
-                salvar_dados("items", {
-                    "item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], 
-                    "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt_item)
-                })
-                st.success("Item adicionado!")
+                salvar_dados("items", {"item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt_item)})
                 st.rerun()
         
         st.divider()
-        st.subheader("Itens Cadastrados")
         df_i = carregar_dados("get_items")
         if not df_i.empty:
             itens_ctt = df_i[df_i['contract_id'] == row_ctt['contract_id']].copy()
             
-            # --- FILTRO DE BUSCA ---
-            busca = st.text_input("🔍 Pesquisar item por nome (ex: SOFA ou MESA)...")
+            # PROTEÇÃO CONTRA O ERRO KEYERROR
+            if 'data_fim_item' not in itens_ctt.columns:
+                itens_ctt['data_fim_item'] = "-"
+            
+            busca = st.text_input("🔍 Pesquisar item...")
             if busca:
                 itens_ctt = itens_ctt[itens_ctt['descricao_item'].str.contains(busca, case=False)]
             
-            # Formatação para exibição na tabela
             itens_ctt['vlr_unit'] = itens_ctt['vlr_unit'].apply(formatar_real)
             itens_ctt['data_fim_item'] = itens_ctt['data_fim_item'].apply(formatar_data_br)
             st.dataframe(itens_ctt[['descricao_item', 'vlr_unit', 'data_fim_item']], use_container_width=True)
 
-# --- 6. PÁGINA: LANÇAR MEDIÇÃO (COM MEMÓRIA E BUSCA) ---
+# --- 6. LANÇAR MEDIÇÃO (MANTIDO) ---
 elif escolha == "Lançar Medição":
     st.title("📏 Lançamento de Medição")
     df_c = carregar_dados("get_contracts")
     df_i = carregar_dados("get_items")
     df_m = carregar_dados("get_measurements")
-    
     if not df_c.empty:
-        ctt_sel = st.selectbox("1. Selecione o Contrato", df_c['ctt'].tolist())
+        ctt_sel = st.selectbox("Contrato", df_c['ctt'].tolist())
         id_ctt = df_c[df_c['ctt'] == ctt_sel]['contract_id'].values[0]
-        itens_f = df_i[df_i['contract_id'] == id_ctt].copy()
-        
+        itens_f = df_i[df_i['contract_id'] == id_ctt].copy() if not df_i.empty else pd.DataFrame()
         if not itens_f.empty:
-            # Filtro de busca também no lançamento
-            busca_l = st.text_input("🔍 Filtrar itens para medir...")
-            if busca_l:
-                itens_f = itens_f[itens_f['descricao_item'].str.contains(busca_l, case=False)]
-            
+            busca_l = st.text_input("🔍 Filtrar...")
+            if busca_l: itens_f = itens_f[itens_f['descricao_item'].str.contains(busca_l, case=False)]
             itens_f['display'] = itens_f.apply(lambda x: f"{x['descricao_item']} ({formatar_real(x['vlr_unit'])})", axis=1)
-            item_nome = st.selectbox("2. Selecione o Item", itens_f['display'].tolist())
+            item_nome = st.selectbox("Item", itens_f['display'].tolist())
             row_i = itens_f[itens_f['display'] == item_nome].iloc[0]
-            
             perc_atual = 0.0
             if not df_m.empty:
                 med_h = df_m[df_m['item_id'] == row_i['item_id']]
                 if not med_h.empty: perc_atual = float(med_h.iloc[-1]['percentual_acumulado'])
-
             with st.form("form_med"):
-                st.info(f"📈 Progresso atual: {perc_atual*100:.2f}%")
-                p = st.slider("Novo Percentual (%)", 0, 100, int(perc_atual * 100)) / 100
-                dt = st.date_input("Data da Medição", format="DD/MM/YYYY")
+                p = st.slider("%", 0, 100, int(perc_atual * 100)) / 100
+                dt = st.date_input("Data", format="DD/MM/YYYY")
                 if st.form_submit_button("Registrar"):
-                    salvar_dados("measurements", {
-                        "measurement_id": str(uuid.uuid4()), "item_id": row_i['item_id'], 
-                        "data_medicao": str(dt), "percentual_acumulado": p, 
-                        "valor_acumulado": p * float(row_i['vlr_unit']), 
-                        "fase_workflow": "Medição lançada", "updated_at": str(datetime.now())
-                    })
+                    salvar_dados("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row_i['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * float(row_i['vlr_unit']), "fase_workflow": "Medição lançada", "updated_at": str(datetime.now())})
                     st.rerun()
 
 # --- 7. KANBAN E CONTRATOS (MANTIDOS) ---
 elif escolha == "Kanban":
-    st.title("📋 Quadro Kanban")
+    st.title("📋 Kanban")
     df_m = carregar_dados("get_measurements")
     df_i = carregar_dados("get_items")
     if not df_m.empty and not df_i.empty:
@@ -199,20 +182,18 @@ elif escolha == "Kanban":
                 st.subheader(f)
                 cards = df_m[df_m['fase_workflow'] == f]
                 for _, card in cards.iterrows():
-                    item_info = df_i[df_i['item_id'] == card['item_id']]
-                    nome = item_info['descricao_item'].values[0] if not item_info.empty else "Item"
+                    it = df_i[df_i['item_id'] == card['item_id']]
+                    nm = it['descricao_item'].values[0] if not it.empty else "Item"
                     with st.container(border=True):
-                        st.write(f"**{nome}**")
-                        st.write(f"Progresso: {float(card['percentual_acumulado'])*100:.0f}%")
-                        st.write(formatar_real(card['valor_acumulado']))
-                        st.caption(f"📅 {formatar_data_br(card['data_medicao'])}")
+                        st.write(f"**{nm}**")
+                        st.write(f"{float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
 elif escolha == "Contratos":
-    st.title("📄 Cadastro de Contratos")
+    st.title("📄 Contratos")
     with st.form("f_con"):
         c1, c2 = st.columns(2)
         ctt = c1.text_input("Número CTT"); forn = c2.text_input("Fornecedor")
-        gest = c1.text_input("Gestor"); vlr = c2.number_input("Valor Total", min_value=0.0)
+        gest = c1.text_input("Gestor"); vlr = c2.number_input("Valor", min_value=0.0)
         dt_i = st.date_input("Início", format="DD/MM/YYYY"); dt_f = st.date_input("Fim", format="DD/MM/YYYY")
         if st.form_submit_button("Salvar"):
             salvar_dados("contracts", {"contract_id": str(uuid.uuid4()), "ctt": ctt, "fornecedor": forn, "gestor": gest, "valor_contrato": vlr, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"})
