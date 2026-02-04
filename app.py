@@ -10,7 +10,7 @@ TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
-# --- 2. FERRAMENTAS ---
+# --- 2. FERRAMENTAS DE TRADUÇÃO E LÓGICA ---
 
 def formatar_real(valor):
     try:
@@ -21,6 +21,27 @@ def formatar_data_br(data_str):
     if pd.isna(data_str) or data_str == "": return "-"
     try: return pd.to_datetime(data_str).strftime('%d/%m/%Y')
     except: return str(data_str)
+
+def verificar_atraso_item(data_fim, data_medicao, percentual):
+    try:
+        hoje = datetime.now().date()
+        fim = pd.to_datetime(data_fim).date()
+        med = pd.to_datetime(data_medicao).date()
+        ref = med if float(percentual) >= 1 else hoje
+        return (fim - ref).days < 0
+    except: return False
+
+def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
+    try:
+        hoje = datetime.now().date()
+        fim = pd.to_datetime(data_fim).date()
+        med = pd.to_datetime(data_medicao).date()
+        ref = med if float(percentual) >= 1 else hoje
+        dif = (fim - ref).days
+        if dif > 0: return f"{dif} dias adiantado", "🟢"
+        elif dif == 0: return "No prazo limite", "🟡"
+        else: return f"{abs(dif)} dias atrasado", "🔴"
+    except: return "Sem dados", "⚪"
 
 def carregar_dados(acao):
     try:
@@ -37,94 +58,149 @@ st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. PÁGINA: ITENS (COM EDIÇÃO E EXCLUSÃO) ---
-if escolha == "Itens":
-    st.title("🏗️ Gestão de Itens")
+# --- 4. PÁGINA: DASHBOARD ---
+if escolha == "Dashboard":
+    st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts")
     df_i = carregar_dados("get_items")
-    df_m = carregar_dados("get_measurements") # Carregar medições para validar exclusão
+    df_m = carregar_dados("get_measurements")
     
+    if not df_c.empty:
+        # Totais no Topo
+        t_con_geral = pd.to_numeric(df_c['valor_contrato']).sum()
+        t_med_geral = pd.to_numeric(df_m['valor_acumulado']).sum() if not df_m.empty else 0
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Contratado", formatar_real(t_con_geral))
+        m2.metric("Total Medido", formatar_real(t_med_geral))
+        m3.metric("Saldo Geral", formatar_real(t_con_geral - t_med_geral))
+        
+        st.divider()
+        gestor_sel = st.selectbox("Filtrar por Gestor", ["Todos"] + sorted(df_c['gestor'].unique().tolist()))
+        df_f = df_c if gestor_sel == "Todos" else df_c[df_c['gestor'] == gestor_sel]
+
+        for _, con in df_f.iterrows():
+            cid = con['contract_id']
+            itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
+            med_ctt = df_m[df_m['item_id'].isin(itens_con['item_id'].tolist())] if not df_m.empty and not itens_con.empty else pd.DataFrame()
+            
+            # Lógica do Farol do Contrato
+            contrato_atrasado = False
+            if not med_ctt.empty:
+                if 'data_fim_item' not in itens_con.columns: itens_con['data_fim_item'] = con['data_fim']
+                rel_check = med_ctt.merge(itens_con[['item_id', 'data_fim_item']], on='item_id')
+                for _, r in rel_check.iterrows():
+                    d_limite = r['data_fim_item'] if not pd.isna(r['data_fim_item']) else con['data_fim']
+                    if verificar_atraso_item(d_limite, r['data_medicao'], r['percentual_acumulado']):
+                        contrato_atrasado = True; break
+            
+            farol = "🔴" if contrato_atrasado else "🟢"
+            bruto = pd.to_numeric(med_ctt['valor_acumulado']).sum() if not med_ctt.empty else 0
+            retencao = bruto * 0.15 
+            liquido = bruto - retencao
+            
+            with st.container(border=True):
+                st.subheader(f"{farol} Contrato: {con['ctt']} - {con['fornecedor']}")
+                f1, f2, f3, f4 = st.columns(4)
+                f1.metric("Bruto Medido", formatar_real(bruto))
+                f2.metric("Retenção (15%)", f"- {formatar_real(retencao)}", delta_color="inverse")
+                f3.metric("Líquido a Pagar", formatar_real(liquido))
+                f4.metric("Saldo Contrato", formatar_real(float(con['valor_contrato']) - bruto))
+                
+                if st.button(f"🔍 Detalhar Boletim {con['ctt']}", key=f"btn_{cid}", use_container_width=True):
+                    if not med_ctt.empty:
+                        rel = med_ctt.merge(itens_con[['item_id', 'descricao_item', 'vlr_unit', 'data_fim_item']], on='item_id')
+                        rel['Status'] = rel.apply(lambda x: calcular_status_prazo_texto(x['data_fim_item'], x['data_medicao'], x['percentual_acumulado']), axis=1)
+                        st.table(pd.DataFrame({
+                            'Item': rel['descricao_item'], 'Vlr Unit.': rel['vlr_unit'].apply(formatar_real),
+                            '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{float(x)*100:.2f}%"),
+                            'Medido R$': rel['valor_acumulado'].apply(formatar_real),
+                            'Prazo Item': rel['data_fim_item'].apply(formatar_data_br), 'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
+                        }))
+                    else: st.info("Sem medições.")
+
+# --- 5. PÁGINA: ITENS (EDIÇÃO E EXCLUSÃO) ---
+elif escolha == "Itens":
+    st.title("🏗️ Gestão de Itens")
+    df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         sel_ctt = st.selectbox("Escolha o Contrato", df_c['ctt'].tolist())
         row_ctt = df_c[df_c['ctt'] == sel_ctt].iloc[0]
-        
-        with st.expander("➕ Adicionar Novo Item"):
+        with st.expander("➕ Novo Item"):
             with st.form("f_item"):
                 c1, c2 = st.columns([2,1])
-                desc = c1.text_input("Descrição do Item")
-                v_u = c2.number_input("Valor Unitário (R$)", min_value=0.0, format="%.2f")
-                dt_fim_default = pd.to_datetime(row_ctt['data_fim']).date()
-                dt_item = st.date_input("Prazo do Item", dt_fim_default, format="DD/MM/YYYY")
-                
-                if st.form_submit_button("Salvar Novo Item"):
-                    salvar_dados("items", {
-                        "item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], 
-                        "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt_item)
-                    })
-                    st.success("Item adicionado!")
+                d = c1.text_input("Descrição"); v = c2.number_input("Vlr Unit", min_value=0.0)
+                dt = st.date_input("Prazo", pd.to_datetime(row_ctt['data_fim']).date())
+                if st.form_submit_button("Salvar"):
+                    salvar_dados("items", {"item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], "descricao_item": d, "vlr_unit": v, "data_fim_item": str(dt)})
                     st.rerun()
-        
-        st.divider()
-        st.subheader(f"Lista de Itens - {sel_ctt}")
-        
         if not df_i.empty:
-            itens_ctt = df_i[df_i['contract_id'] == row_ctt['contract_id']].copy()
-            
-            busca = st.text_input("🔍 Pesquisar item...")
-            if busca:
-                itens_ctt = itens_ctt[itens_ctt['descricao_item'].str.contains(busca, case=False)]
-
-            for index, item in itens_ctt.iterrows():
-                # Verifica se o item já tem medição
-                tem_medicao = False
-                if not df_m.empty:
-                    tem_medicao = item['item_id'] in df_m['item_id'].values
-
+            i_f = df_i[df_i['contract_id'] == row_ctt['contract_id']]
+            for _, item in i_f.iterrows():
+                med_existe = item['item_id'] in df_m['item_id'].values if not df_m.empty else False
                 with st.container(border=True):
-                    col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
-                    
-                    # Campos de edição
-                    nova_desc = col1.text_input("Descrição", value=item['descricao_item'], key=f"desc_{item['item_id']}")
-                    novo_vlr = col2.number_input("Valor Unit.", value=float(item['vlr_unit']), key=f"vlr_{item['item_id']}")
-                    
-                    col3.write(f"**Prazo:**\n{formatar_data_br(item.get('data_fim_item', ''))}")
-                    
-                    # Botão Salvar Edição
-                    if col4.button("💾", key=f"save_{item['item_id']}", help="Salvar alterações"):
-                        salvar_dados("items", 
-                                     {"descricao_item": nova_desc, "vlr_unit": novo_vlr}, 
-                                     acao="update", id_field="item_id", id_value=item['item_id'])
-                        st.toast("Item atualizado!")
+                    c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+                    n_d = c1.text_input("Desc", item['descricao_item'], key=f"d_{item['item_id']}")
+                    n_v = c2.number_input("Vlr", value=float(item['vlr_unit']), key=f"v_{item['item_id']}")
+                    if c3.button("💾", key=f"s_{item['item_id']}"):
+                        salvar_dados("items", {"descricao_item": n_d, "vlr_unit": n_v}, "update", "item_id", item['item_id'])
                         st.rerun()
-                    
-                    # Botão Excluir (Bloqueado se houver medição)
-                    if not tem_medicao:
-                        if col5.button("🗑️", key=f"del_{item['item_id']}", help="Excluir item"):
-                            salvar_dados("items", {}, acao="delete", id_field="item_id", id_value=item['item_id'])
-                            st.warning("Item excluído!")
-                            st.rerun()
-                    else:
-                        col5.write("⚠️ Medido")
+                    if not med_existe and c4.button("🗑️", key=f"del_{item['item_id']}"):
+                        salvar_dados("items", {}, "delete", "item_id", item['item_id'])
+                        st.rerun()
 
-# --- AS OUTRAS PÁGINAS CONTINUAM IGUAIS ---
-# (Manter os blocos Dashboard, Lançar Medição, Kanban e Contratos do script anterior)
-elif escolha == "Dashboard":
-    # ... código do dashboard mantido ...
-    st.title("📊 Painel de Controle e Cronograma")
-    df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
-    # (Copie o resto do código do dashboard aqui para completar o arquivo)
-
+# --- 6. PÁGINA: MEDIÇÃO (FILTRO E MEMÓRIA) ---
 elif escolha == "Lançar Medição":
-    # ... código de medição mantido ...
     st.title("📏 Lançamento de Medição")
-    # (Copie o resto do código de medição aqui)
+    df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
+    if not df_c.empty:
+        c_sel = st.selectbox("Contrato", df_c['ctt'].tolist())
+        id_c = df_c[df_c['ctt'] == c_sel]['contract_id'].values[0]
+        i_f = df_i[df_i['contract_id'] == id_c].copy() if not df_i.empty else pd.DataFrame()
+        if not i_f.empty:
+            b = st.text_input("🔍 Filtrar Itens..."); 
+            if b: i_f = i_f[i_f['descricao_item'].str.contains(b, case=False)]
+            i_f['display'] = i_f.apply(lambda x: f"{x['descricao_item']} ({formatar_real(x['vlr_unit'])})", axis=1)
+            row = i_f[i_f['display'] == st.selectbox("Item", i_f['display'].tolist())].iloc[0]
+            p_a = 0.0
+            if not df_m.empty:
+                m_h = df_m[df_m['item_id'] == row['item_id']]
+                if not m_h.empty: p_a = float(m_h.iloc[-1]['percentual_acumulado'])
+            with st.form("f_m"):
+                st.info(f"Progresso Atual: {p_a*100:.2f}%")
+                p = st.slider("%", 0, 100, int(p_a * 100)) / 100
+                dt = st.date_input("Data", format="DD/MM/YYYY")
+                if st.form_submit_button("Registrar"):
+                    salvar_dados("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * float(row['vlr_unit']), "fase_workflow": "Medição lançada", "updated_at": str(datetime.now())})
+                    st.rerun()
 
+# --- 7. KANBAN (FILTRADO) ---
 elif escolha == "Kanban":
-    # ... código do kanban mantido ...
     st.title("📋 Quadro Kanban")
-    # (Copie o resto do código do kanban aqui)
+    df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
+    if not df_c.empty:
+        sel = st.selectbox("Filtrar Contrato:", ["Todos"] + df_c['ctt'].tolist())
+        m_f = df_m
+        if sel != "Todos":
+            cid = df_c[df_c['ctt'] == sel]['contract_id'].values[0]
+            m_f = df_m[df_m['item_id'].isin(df_i[df_i['contract_id'] == cid]['item_id'])]
+        cols = st.columns(4)
+        for i, f in enumerate(["Em execução", "Medição lançada", "Aprovado", "Faturado"]):
+            with cols[i]:
+                st.subheader(f)
+                for _, card in m_f[m_f['fase_workflow'] == f].iterrows():
+                    nm = df_i[df_i['item_id'] == card['item_id']]['descricao_item'].values[0]
+                    with st.container(border=True):
+                        st.write(f"**{nm}**")
+                        st.write(f"{float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
+# --- 8. CONTRATOS ---
 elif escolha == "Contratos":
-    # ... código de contratos mantido ...
     st.title("📄 Cadastro de Contratos")
-    # (Copie o resto do código de contratos aqui)
+    with st.form("f_con"):
+        c1, c2 = st.columns(2); ctt = c1.text_input("Número CTT"); forn = c2.text_input("Fornecedor")
+        gst = c1.text_input("Gestor"); vlr = c2.number_input("Valor", min_value=0.0)
+        dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
+        if st.form_submit_button("Salvar"):
+            salvar_dados("contracts", {"contract_id": str(uuid.uuid4()), "ctt": ctt, "fornecedor": forn, "gestor": gst, "valor_contrato": vlr, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"})
+            st.rerun()
