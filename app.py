@@ -51,7 +51,7 @@ st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. PÁGINA: DASHBOARD (VISÃO CLIENTE E FORNECEDOR) ---
+# --- 4. PÁGINA: DASHBOARD (COM LÓGICA DE FAROL 🟢🟡🔴) ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -73,27 +73,25 @@ if escolha == "Dashboard":
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
             med_ctt = df_m[df_m['item_id'].isin(itens_con['item_id'].tolist())] if not df_m.empty and not itens_con.empty else pd.DataFrame()
             
-            # Lógica do Farol
-            atrasado = False
-            if not med_ctt.empty:
+            # --- NOVA LÓGICA DO FAROL TRI-COLOR ---
+            if med_ctt.empty:
+                farol = "🟡" # Sem medições registradas
+            else:
+                atrasado = False
                 if 'data_fim_item' not in itens_con.columns: itens_con['data_fim_item'] = con['data_fim']
                 rel_check = med_ctt.merge(itens_con[['item_id', 'data_fim_item']], on='item_id')
                 for _, r in rel_check.iterrows():
                     d_fim = r['data_fim_item'] if not pd.isna(r['data_fim_item']) else con['data_fim']
                     if (pd.to_datetime(d_fim).date() - datetime.now().date()).days < 0 and float(r['percentual_acumulado']) < 1:
                         atrasado = True; break
+                farol = "🔴" if atrasado else "🟢"
             
-            farol = "🔴" if atrasado else "🟢"
             v_bruto = pd.to_numeric(med_ctt['valor_acumulado']).sum() if not med_ctt.empty else 0
-            
-            # Montagem do título organizado
             cliente_info = f"{con.get('cliente', 'Cliente')} (CTR: {con.get('ctr', '-')})"
             fornecedor_info = f"{con['fornecedor']} (CTT: {con['ctt']})"
 
             with st.container(border=True):
-                # Título em destaque para o cliente e fornecedor
                 st.markdown(f"#### {farol} {cliente_info} | {fornecedor_info}")
-                
                 f1, f2, f3, f4 = st.columns(4)
                 f1.metric("Bruto Medido", formatar_real(v_bruto))
                 f2.metric("Retenção (15%)", f"- {formatar_real(v_bruto*0.15)}", delta_color="inverse")
@@ -111,18 +109,16 @@ if escolha == "Dashboard":
                             'Medido R$': rel['valor_acumulado'].apply(formatar_real),
                             'Prazo': rel['Data Limite'].apply(formatar_data_br), 'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
                         }))
-                    else: st.warning("Sem medições para detalhar.")
+                    else: st.info("Contrato sem medições para detalhar.")
 
 # --- 5. ITENS (BUSCA, EDIÇÃO E EXCLUSÃO) ---
 elif escolha == "Itens":
     st.title("🏗️ Gestão de Itens")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
-        # Mostra Cliente e Fornecedor na lista de seleção
         df_c['list_name'] = df_c.apply(lambda x: f"{x.get('cliente', 'Sem Cliente')} / {x['fornecedor']} (CTT: {x['ctt']})", axis=1)
         sel_ctt = st.selectbox("Escolha o Contrato", df_c['list_name'].tolist())
         row_ctt = df_c[df_c['list_name'] == sel_ctt].iloc[0]
-        
         with st.expander("➕ Novo Item"):
             with st.form("f_item"):
                 c1, c2 = st.columns([2,1])
@@ -169,7 +165,7 @@ elif escolha == "Lançar Medição":
                     st.rerun()
             if not df_m.empty: st.subheader("📋 Histórico"); st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])], use_container_width=True, height=200)
 
-# --- 7. KANBAN (MANTIDO) ---
+# --- 7. KANBAN ---
 elif escolha == "Kanban":
     st.title("📋 Quadro Kanban")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -189,22 +185,15 @@ elif escolha == "Kanban":
                                 st.caption(f"📑 CTT: {df_c[df_c['contract_id'] == it_row.iloc[0]['contract_id']].iloc[0]['ctt']}")
                                 st.write(f"{float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
-# --- 8. CONTRATOS (COM CLIENTE E CTR) ---
+# --- 8. CONTRATOS ---
 elif escolha == "Contratos":
     st.title("📄 Cadastro de Contratos")
     with st.form("f_con"):
         c1, c2 = st.columns(2)
-        cliente = c1.text_input("Nome do Cliente") # NOVO
-        ctr = c2.text_input("CTR (Controle do Cliente)") # NOVO
-        forn = c1.text_input("Nome do Fornecedor")
-        ctt = c2.text_input("Número CTT (Contrato Fornecedor)")
-        gest = c1.text_input("Gestor")
-        vlr = c2.number_input("Valor Total", min_value=0.0)
+        cliente = c1.text_input("Nome do Cliente"); ctr = c2.text_input("CTR")
+        forn = c1.text_input("Nome do Fornecedor"); ctt = c2.text_input("Número CTT")
+        gest = c1.text_input("Gestor"); vlr = c2.number_input("Valor Total", min_value=0.0)
         dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
         if st.form_submit_button("Salvar Contrato"):
-            salvar_dados("contracts", {
-                "contract_id": str(uuid.uuid4()), "cliente": cliente, "ctr": ctr, 
-                "fornecedor": forn, "ctt": ctt, "gestor": gest, "valor_contrato": vlr, 
-                "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"
-            })
+            salvar_dados("contracts", {"contract_id": str(uuid.uuid4()), "cliente": cliente, "ctr": ctr, "fornecedor": forn, "ctt": ctt, "gestor": gest, "valor_contrato": vlr, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"})
             st.rerun()
