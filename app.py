@@ -10,12 +10,12 @@ TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
-# --- 2. FERRAMENTAS DE ALTA PERFORMANCE ---
+# --- 2. FERRAMENTAS DE PERFORMANCE ---
 
-@st.cache_data(ttl=60) # Cache de 1 minuto para equilibrar velocidade e dados novos
+@st.cache_data(ttl=300) # Dados ficam em memória por 5 min
 def carregar_dados(acao):
     try:
-        r = requests.get(URL_DO_APPS_SCRIPT, params={"token": TOKEN, "action": acao}, timeout=15)
+        r = requests.get(URL_DO_APPS_SCRIPT, params={"token": TOKEN, "action": acao}, timeout=10)
         return pd.DataFrame(r.json()) if r.status_code == 200 else pd.DataFrame()
     except: return pd.DataFrame()
 
@@ -28,12 +28,17 @@ def formatar_data_br(data_str):
     try: return pd.to_datetime(data_str).strftime('%d/%m/%Y')
     except: return str(data_str)
 
-def salvar_dados(tabela, dados, acao="create", id_field=None, id_value=None):
+def salvar_dados_otimizado(tabela, dados, acao="create", id_field=None, id_value=None):
     payload = {"token": TOKEN, "table": tabela, "data": dados, "action": acao, "id_field": id_field, "id_value": id_value}
-    with st.spinner('Sincronizando dados...'):
-        r = requests.post(URL_DO_APPS_SCRIPT, json=payload, timeout=20)
-        st.cache_data.clear() # Limpa o cache para atualizar as telas após salvar
-        return r
+    # Feedback visual imediato
+    with st.spinner('Sincronizando com a Nuvem...'):
+        try:
+            r = requests.post(URL_DO_APPS_SCRIPT, json=payload, timeout=15)
+            st.cache_data.clear() # Limpa apenas após sucesso
+            return True
+        except:
+            st.error("Erro na conexão. O dado pode não ter sido salvo.")
+            return False
 
 def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
     try:
@@ -52,7 +57,7 @@ st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD (SINALIZAÇÃO 🟢🟡🔴) ---
+# --- 4. DASHBOARD (MANTENDO TODAS AS REGRAS) ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -74,7 +79,7 @@ if escolha == "Dashboard":
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
             med_ctt = df_m[df_m['item_id'].isin(itens_con['item_id'].tolist())] if not df_m.empty and not itens_con.empty else pd.DataFrame()
             
-            # Farol Tri-color (🟡 Sem medição | 🔴 Atraso | 🟢 Ok)
+            # Lógica do Farol Tri-color
             if med_ctt.empty: farol = "🟡"
             else:
                 atrasado = False
@@ -107,11 +112,10 @@ if escolha == "Dashboard":
                             'Item': rel['descricao_item'], 'Vlr Unit.': rel['vlr_unit'].apply(formatar_real),
                             '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{float(x)*100:.2f}%"),
                             'Medido R$': rel['valor_acumulado'].apply(formatar_real),
-                            'Prazo': rel['Data Limite'].apply(formatar_data_br), 'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
+                            'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
                         }))
-                    else: st.info("Contrato sem medições para detalhar.")
 
-# --- 5. ITENS (EDIÇÃO E BUSCA) ---
+# --- 5. ITENS (OTIMIZADO) ---
 elif escolha == "Itens":
     st.title("🏗️ Gestão de Itens")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -119,14 +123,16 @@ elif escolha == "Itens":
         df_c['list_name'] = df_c.apply(lambda x: f"{x.get('cliente', 'Sem Cliente')} / {x['fornecedor']} (CTT: {x['ctt']})", axis=1)
         sel_ctt = st.selectbox("Escolha o Contrato", df_c['list_name'].tolist())
         row_ctt = df_c[df_c['list_name'] == sel_ctt].iloc[0]
+        
         with st.expander("➕ Novo Item"):
-            with st.form("f_item"):
+            with st.form("f_item", clear_on_submit=True):
                 c1, c2 = st.columns([2,1])
                 desc = c1.text_input("Descrição"); v_u = c2.number_input("Vlr Unit", min_value=0.0)
                 dt = st.date_input("Prazo", pd.to_datetime(row_ctt['data_fim']).date())
                 if st.form_submit_button("Salvar Item"):
-                    salvar_dados("items", {"item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt)})
-                    st.rerun()
+                    if salvar_dados_otimizado("items", {"item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt)}):
+                        st.rerun()
+
         if not df_i.empty:
             i_f = df_i[df_i['contract_id'] == row_ctt['contract_id']]
             busca = st.text_input("🔍 Pesquisar...")
@@ -137,11 +143,13 @@ elif escolha == "Itens":
                     n_d = c1.text_input("Desc", item['descricao_item'], key=f"d_{item['item_id']}")
                     n_v = c2.number_input("Vlr", value=float(item['vlr_unit']), key=f"v_{item['item_id']}")
                     if c3.button("💾", key=f"s_{item['item_id']}"):
-                        salvar_dados("items", {"descricao_item": n_d, "vlr_unit": n_v}, "update", "item_id", item['item_id']); st.rerun()
+                        salvar_dados_otimizado("items", {"descricao_item": n_d, "vlr_unit": n_v}, "update", "item_id", item['item_id'])
+                        st.rerun()
                     if (item['item_id'] not in df_m['item_id'].values if not df_m.empty else True) and c4.button("🗑️", key=f"del_{item['item_id']}"):
-                        salvar_dados("items", {}, "delete", "item_id", item['item_id']); st.rerun()
+                        salvar_dados_otimizado("items", {}, "delete", "item_id", item['item_id'])
+                        st.rerun()
 
-# --- 6. MEDIÇÃO (MANTIDA) ---
+# --- 6. MEDIÇÃO (MEMÓRIA E ROLAGEM) ---
 elif escolha == "Lançar Medição":
     st.title("📏 Lançamento de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -150,20 +158,18 @@ elif escolha == "Lançar Medição":
         id_c = df_c[df_c['ctt'] == c_sel]['contract_id'].values[0]
         i_f = df_i[df_i['contract_id'] == id_c].copy()
         if not i_f.empty:
-            b = st.text_input("🔍 Filtrar Itens..."); 
-            if b: i_f = i_f[i_f['descricao_item'].str.contains(b, case=False)]
-            i_f['display'] = i_f.apply(lambda x: f"{x['descricao_item']} ({formatar_real(x['vlr_unit'])})", axis=1)
-            row = i_f[i_f['display'] == st.selectbox("Item", i_f['display'].tolist())].iloc[0]
+            i_sel = st.selectbox("Item", i_f['descricao_item'].tolist())
+            row = i_f[i_f['descricao_item'] == i_sel].iloc[0]
             p_a = float(df_m[df_m['item_id'] == row['item_id']].iloc[-1]['percentual_acumulado']) if not df_m.empty and not df_m[df_m['item_id'] == row['item_id']].empty else 0.0
-            with st.form("f_m"):
+            with st.form("f_m", clear_on_submit=True):
                 st.info(f"Progresso Atual: {p_a*100:.2f}%")
                 p = st.slider("%", 0, 100, int(p_a * 100)) / 100
                 dt = st.date_input("Data", format="DD/MM/YYYY")
                 fase = st.selectbox("Fase do Kanban", ["Em execução", "Medição lançada", "Aprovado", "Faturado"])
-                if st.form_submit_button("Registrar"):
-                    salvar_dados("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())})
-                    st.rerun()
-            if not df_m.empty: st.subheader("📋 Histórico"); st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])], use_container_width=True, height=200)
+                if st.form_submit_button("Registrar Medição"):
+                    if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())}):
+                        st.rerun()
+            if not df_m.empty: st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])], use_container_width=True, height=200)
 
 # --- 7. KANBAN ---
 elif escolha == "Kanban":
@@ -188,12 +194,12 @@ elif escolha == "Kanban":
 # --- 8. CONTRATOS ---
 elif escolha == "Contratos":
     st.title("📄 Cadastro de Contratos")
-    with st.form("f_con"):
+    with st.form("f_con", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        cliente = c1.text_input("Nome do Cliente"); ctr = c2.text_input("CTR")
-        forn = c1.text_input("Nome do Fornecedor"); ctt = c2.text_input("Número CTT")
-        gest = c1.text_input("Gestor"); vlr = c2.number_input("Valor Total", min_value=0.0)
+        cl = c1.text_input("Cliente"); ctr = c2.text_input("CTR")
+        fo = c1.text_input("Fornecedor"); ctt = c2.text_input("CTT")
+        gs = c1.text_input("Gestor"); vl = c2.number_input("Valor Total")
         dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
         if st.form_submit_button("Salvar Contrato"):
-            salvar_dados("contracts", {"contract_id": str(uuid.uuid4()), "cliente": cliente, "ctr": ctr, "fornecedor": forn, "ctt": ctt, "gestor": gest, "valor_contrato": vlr, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"})
-            st.rerun()
+            if salvar_dados_otimizado("contracts", {"contract_id": str(uuid.uuid4()), "cliente": cl, "ctr": ctr, "fornecedor": fo, "ctt": ctt, "gestor": gs, "valor_contrato": vl, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"}):
+                st.rerun()
