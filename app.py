@@ -202,4 +202,4 @@ elif escolha == "Contratos":
         dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
         if st.form_submit_button("Salvar Contrato"):
             if salvar_dados_otimizado("contracts", {"contract_id": str(uuid.uuid4()), "cliente": cl, "ctr": ctr, "fornecedor": fo, "ctt": ctt, "gestor": gs, "valor_contrato": vl, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"}):
-                st.rerun()
+                st.rerun
