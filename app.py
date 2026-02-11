@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import uuid
+import io
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÕES ---
@@ -16,7 +17,7 @@ st.markdown("""
     td { text-align: right !important; }
     td:first-child { text-align: left !important; }
     @media print {
-        .stSidebar, .stHeader, .stButton { display: none !important; }
+        .stSidebar, .stHeader, .stButton, .no-print { display: none !important; }
         .main { padding: 0px !important; }
     }
     </style>
@@ -120,7 +121,7 @@ if escolha == "Dashboard":
                         rel['Status'] = rel.apply(lambda x: calcular_status_prazo_texto(x['Data Limite'], x['data_medicao'], x['percentual_acumulado']), axis=1)
                         st.table(pd.DataFrame({'Item': rel['descricao_item'], 'Vlr Unit.': rel['vlr_unit'].apply(formatar_real), '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Medido R$': rel['valor_acumulado'].apply(formatar_real), 'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")}))
 
-# --- 5. ITENS (COM COMPARATIVO FINANCEIRO ACUMULADO) ---
+# --- 5. ITENS ---
 elif escolha == "Itens":
     st.title("🏗️ Gestão de Itens")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -142,7 +143,6 @@ elif escolha == "Itens":
             i_f = df_i[df_i['contract_id'] == row_ctt['contract_id']]
             busca = st.text_input("🔍 Pesquisar...")
             if busca: i_f = i_f[i_f['descricao_item'].str.contains(busca, case=False)]
-            
             for _, item in i_f.iterrows():
                 with st.container(border=True):
                     c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
@@ -153,28 +153,23 @@ elif escolha == "Itens":
                     if (item['item_id'] not in df_m['item_id'].values if not df_m.empty else True) and c4.button("🗑️", key=f"del_{item['item_id']}"):
                         salvar_dados_otimizado("items", {}, "delete", "item_id", item['item_id']); st.rerun()
             
-            # --- NOVO BLOCO: COMPARATIVO FINANCEIRO ---
             st.divider()
             total_lancado = i_f['vlr_unit'].apply(safe_float).sum()
             valor_contrato = safe_float(row_ctt['valor_contrato'])
             percentual_preechido = (total_lancado / valor_contrato * 100) if valor_contrato > 0 else 0
-            
             with st.container(border=True):
                 st.subheader("💰 Resumo Financeiro de Lançamentos")
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Total Lançado (Itens)", formatar_real(total_lancado))
                 c2.metric("Valor Total Contrato", formatar_real(valor_contrato))
-                
-                # Alerta visual se passar do valor
                 delta = valor_contrato - total_lancado
                 if delta < 0:
                     c3.metric("Diferença", formatar_real(delta), delta_color="inverse")
-                    st.error(f"Atenção: Os itens lançados superam o valor do contrato em {formatar_real(abs(delta))}!")
+                    st.error(f"Atenção: Os itens superam o contrato em {formatar_real(abs(delta))}!")
                 else:
                     c3.metric("Saldo a Lançar", formatar_real(delta))
-                
                 st.progress(min(percentual_preechido / 100, 1.0))
-                st.caption(f"Você já lançou {percentual_preechido:.2f}% do valor total deste contrato.")
+                st.caption(f"Você já lançou {percentual_preechido:.2f}% do valor total.")
 
 # --- 6. MEDIÇÃO ---
 elif escolha == "Lançar Medição":
@@ -223,7 +218,7 @@ elif escolha == "Kanban":
                                 st.caption(f"📑 CTT: {df_c[df_c['contract_id'] == it_row.iloc[0]['contract_id']].iloc[0]['ctt']}")
                                 st.write(f"{safe_float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
-# --- 8. RELATÓRIO ---
+# --- 8. RELATÓRIO (COM EXPORTAÇÃO EXCEL) ---
 elif escolha == "Relatório":
     st.title("📝 Relatório de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -236,8 +231,37 @@ elif escolha == "Relatório":
             df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
         itens_con = df_i[df_i['contract_id'] == con['contract_id']]
         med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
-        if st.button("🖨️ Imprimir Boletim"):
-            st.components.v1.html("<script>window.print();</script>", height=0)
+
+        # Botões de Ação
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🖨️ Imprimir Boletim", use_container_width=True):
+                st.components.v1.html("<script>window.print();</script>", height=0)
+        
+        with c2:
+            if not med_ctt.empty:
+                rel_excel = itens_con.merge(med_ctt, on='item_id', how='left')
+                df_export = pd.DataFrame({
+                    'Item': rel_excel['descricao_item'],
+                    'Valor Unitário': rel_excel['vlr_unit'].apply(safe_float),
+                    'Medição (%)': rel_excel['percentual_acumulado'].apply(safe_float),
+                    'Medição (R$)': rel_excel['valor_acumulado'].apply(safe_float)
+                })
+                
+                # Gerar Excel em memória
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df_export.to_excel(writer, index=False, sheet_name='Boletim')
+                processed_data = output.getvalue()
+                
+                st.download_button(
+                    label="📥 Exportar para Excel",
+                    data=processed_data,
+                    file_name=f"Boletim_{con['ctt']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
         with st.container(border=True):
             st.markdown(f"### ANEXO I - Boletim de Medição")
             c1, c2 = st.columns(2)
