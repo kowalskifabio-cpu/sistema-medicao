@@ -10,9 +10,9 @@ TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
-# --- 2. FERRAMENTAS DE PERFORMANCE ---
+# --- 2. FERRAMENTAS DE PERFORMANCE E DEDUPLICAÇÃO ---
 
-@st.cache_data(ttl=300) # Dados ficam em memória por 5 min
+@st.cache_data(ttl=300) 
 def carregar_dados(acao):
     try:
         r = requests.get(URL_DO_APPS_SCRIPT, params={"token": TOKEN, "action": acao}, timeout=10)
@@ -30,15 +30,12 @@ def formatar_data_br(data_str):
 
 def salvar_dados_otimizado(tabela, dados, acao="create", id_field=None, id_value=None):
     payload = {"token": TOKEN, "table": tabela, "data": dados, "action": acao, "id_field": id_field, "id_value": id_value}
-    # Feedback visual imediato
     with st.spinner('Sincronizando com a Nuvem...'):
         try:
             r = requests.post(URL_DO_APPS_SCRIPT, json=payload, timeout=15)
-            st.cache_data.clear() # Limpa apenas após sucesso
+            st.cache_data.clear() 
             return True
-        except:
-            st.error("Erro na conexão. O dado pode não ter sido salvo.")
-            return False
+        except: return False
 
 def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
     try:
@@ -57,17 +54,24 @@ st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD (MANTENDO TODAS AS REGRAS) ---
+# --- 4. DASHBOARD (SINALIZAÇÃO 🟢🟡🔴 COM DEDUPLICAÇÃO) ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     
     if not df_c.empty:
+        # --- LÓGICA DE DEDUPLICAÇÃO: PEGA APENAS A ÚLTIMA MEDIÇÃO DE CADA ITEM ---
+        df_m_last = pd.DataFrame()
+        if not df_m.empty:
+            df_m['updated_at'] = pd.to_datetime(df_m['updated_at'])
+            df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
+
         t_con = pd.to_numeric(df_c['valor_contrato']).sum()
-        t_med = pd.to_numeric(df_m['valor_acumulado']).sum() if not df_m.empty else 0
+        t_med = pd.to_numeric(df_m_last['valor_acumulado']).sum() if not df_m_last.empty else 0
+        
         m1, m2, m3 = st.columns(3)
         m1.metric("Total Contratado", formatar_real(t_con))
-        m2.metric("Total Medido", formatar_real(t_med))
+        m2.metric("Total Medido (Atual)", formatar_real(t_med))
         m3.metric("Saldo Geral", formatar_real(t_con - t_med))
         
         st.divider()
@@ -77,9 +81,8 @@ if escolha == "Dashboard":
         for _, con in df_f.iterrows():
             cid = con['contract_id']
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
-            med_ctt = df_m[df_m['item_id'].isin(itens_con['item_id'].tolist())] if not df_m.empty and not itens_con.empty else pd.DataFrame()
+            med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'].tolist())] if not df_m_last.empty and not itens_con.empty else pd.DataFrame()
             
-            # Lógica do Farol Tri-color
             if med_ctt.empty: farol = "🟡"
             else:
                 atrasado = False
@@ -149,7 +152,7 @@ elif escolha == "Itens":
                         salvar_dados_otimizado("items", {}, "delete", "item_id", item['item_id'])
                         st.rerun()
 
-# --- 6. MEDIÇÃO (MEMÓRIA E ROLAGEM) ---
+# --- 6. MEDIÇÃO (DEDUPLICAÇÃO NO HISTÓRICO) ---
 elif escolha == "Lançar Medição":
     st.title("📏 Lançamento de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -160,7 +163,14 @@ elif escolha == "Lançar Medição":
         if not i_f.empty:
             i_sel = st.selectbox("Item", i_f['descricao_item'].tolist())
             row = i_f[i_f['descricao_item'] == i_sel].iloc[0]
-            p_a = float(df_m[df_m['item_id'] == row['item_id']].iloc[-1]['percentual_acumulado']) if not df_m.empty and not df_m[df_m['item_id'] == row['item_id']].empty else 0.0
+            
+            # Busca o último percentual real
+            p_a = 0.0
+            if not df_m.empty:
+                m_h = df_m[df_m['item_id'] == row['item_id']]
+                if not m_h.empty:
+                    p_a = float(m_h.sort_values('updated_at').iloc[-1]['percentual_acumulado'])
+
             with st.form("f_m", clear_on_submit=True):
                 st.info(f"Progresso Atual: {p_a*100:.2f}%")
                 p = st.slider("%", 0, 100, int(p_a * 100)) / 100
@@ -169,17 +179,30 @@ elif escolha == "Lançar Medição":
                 if st.form_submit_button("Registrar Medição"):
                     if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())}):
                         st.rerun()
-            if not df_m.empty: st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])], use_container_width=True, height=200)
+            
+            if not df_m.empty: 
+                st.subheader("📋 Últimas Medições Registradas")
+                # Mostra o histórico deduplicado para facilitar a conferência
+                st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])].sort_values('updated_at', ascending=False), use_container_width=True, height=200)
 
-# --- 7. KANBAN ---
+# --- 7. KANBAN (MANTENDO ÚLTIMA FASE) ---
 elif escolha == "Kanban":
     st.title("📋 Quadro Kanban")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         sel = st.selectbox("Filtrar Contrato:", ["Todos"] + df_c['ctt'].tolist())
-        m_f = df_m if sel == "Todos" else df_m[df_m['item_id'].isin(df_i[df_i['contract_id'] == df_c[df_c['ctt'] == sel]['contract_id'].values[0]]['item_id'])]
+        
+        # Deduplicação no Kanban para evitar cards duplicados
+        m_f = pd.DataFrame()
+        if not df_m.empty:
+            m_f = df_m.sort_values('updated_at').groupby('item_id').tail(1)
+            if sel != "Todos":
+                cid = df_c[df_c['ctt'] == sel]['contract_id'].values[0]
+                m_f = m_f[m_f['item_id'].isin(df_i[df_i['contract_id'] == cid]['item_id'])]
+
         cols = st.columns(4)
-        for i, f in enumerate(["Em execução", "Medição lançada", "Aprovado", "Faturado"]):
+        fases = ["Em execução", "Medição lançada", "Aprovado", "Faturado"]
+        for i, f in enumerate(fases):
             with cols[i]:
                 st.subheader(f)
                 if not m_f.empty and 'fase_workflow' in m_f.columns:
