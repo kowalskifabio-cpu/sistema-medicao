@@ -20,7 +20,6 @@ def carregar_dados(acao):
     except: return pd.DataFrame()
 
 def safe_float(valor):
-    """Proteção contra erros de conversão (evita ValueErrors)"""
     try:
         if pd.isna(valor) or valor == "": return 0.0
         return float(valor)
@@ -42,9 +41,7 @@ def salvar_dados_otimizado(tabela, dados, acao="create", id_field=None, id_value
             r = requests.post(URL_DO_APPS_SCRIPT, json=payload, timeout=15)
             st.cache_data.clear() 
             return True
-        except:
-            st.error("Erro na conexão. O dado pode não ter sido salvo.")
-            return False
+        except: return False
 
 def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
     try:
@@ -61,16 +58,16 @@ def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
 
 # --- 3. MENU LATERAL ---
 st.sidebar.title("Navegação")
-menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban"]
+# Adicionado "Relatório" ao menu
+menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban", "Relatório"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD (COM DEDUPLICAÇÃO E SINALIZAÇÃO) ---
+# --- 4. DASHBOARD (SINALIZAÇÃO 🟢🟡🔴 COM DEDUPLICAÇÃO) ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     
     if not df_c.empty:
-        # LÓGICA DE DEDUPLICAÇÃO: Pega apenas o estado atual (última medição) de cada item
         df_m_last = pd.DataFrame()
         if not df_m.empty:
             df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
@@ -93,7 +90,6 @@ if escolha == "Dashboard":
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
             med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'].tolist())] if not df_m_last.empty and not itens_con.empty else pd.DataFrame()
             
-            # Lógica do Farol Tri-color
             if med_ctt.empty: farol = "🟡"
             else:
                 atrasado = False
@@ -138,7 +134,6 @@ elif escolha == "Itens":
         df_c['list_name'] = df_c.apply(lambda x: f"{x.get('cliente', 'Sem Cliente')} / {x['fornecedor']} (CTT: {x['ctt']})", axis=1)
         sel_ctt = st.selectbox("Escolha o Contrato", df_c['list_name'].tolist())
         row_ctt = df_c[df_c['list_name'] == sel_ctt].iloc[0]
-        
         with st.expander("➕ Novo Item"):
             with st.form("f_item", clear_on_submit=True):
                 c1, c2 = st.columns([2,1])
@@ -147,7 +142,6 @@ elif escolha == "Itens":
                 if st.form_submit_button("Salvar Item"):
                     if salvar_dados_otimizado("items", {"item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt)}):
                         st.rerun()
-
         if not df_i.empty:
             i_f = df_i[df_i['contract_id'] == row_ctt['contract_id']]
             busca = st.text_input("🔍 Pesquisar...")
@@ -158,13 +152,11 @@ elif escolha == "Itens":
                     n_d = c1.text_input("Desc", item['descricao_item'], key=f"d_{item['item_id']}")
                     n_v = c2.number_input("Vlr", value=safe_float(item['vlr_unit']), key=f"v_{item['item_id']}")
                     if c3.button("💾", key=f"s_{item['item_id']}"):
-                        salvar_dados_otimizado("items", {"descricao_item": n_d, "vlr_unit": n_v}, "update", "item_id", item['item_id'])
-                        st.rerun()
+                        salvar_dados_otimizado("items", {"descricao_item": n_d, "vlr_unit": n_v}, "update", "item_id", item['item_id']); st.rerun()
                     if (item['item_id'] not in df_m['item_id'].values if not df_m.empty else True) and c4.button("🗑️", key=f"del_{item['item_id']}"):
-                        salvar_dados_otimizado("items", {}, "delete", "item_id", item['item_id'])
-                        st.rerun()
+                        salvar_dados_otimizado("items", {}, "delete", "item_id", item['item_id']); st.rerun()
 
-# --- 6. MEDIÇÃO (SLIDER INTELIGENTE) ---
+# --- 6. MEDIÇÃO ---
 elif escolha == "Lançar Medição":
     st.title("📏 Lançamento de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -175,13 +167,7 @@ elif escolha == "Lançar Medição":
         if not i_f.empty:
             i_sel = st.selectbox("Item", i_f['descricao_item'].tolist())
             row = i_f[i_f['descricao_item'] == i_sel].iloc[0]
-            
-            p_a = 0.0
-            if not df_m.empty:
-                m_h = df_m[df_m['item_id'] == row['item_id']]
-                if not m_h.empty:
-                    p_a = safe_float(m_h.sort_values('updated_at').iloc[-1]['percentual_acumulado'])
-
+            p_a = safe_float(df_m[df_m['item_id'] == row['item_id']].sort_values('updated_at').iloc[-1]['percentual_acumulado']) if not df_m.empty and not df_m[df_m['item_id'] == row['item_id']].empty else 0.0
             with st.form("f_m", clear_on_submit=True):
                 st.info(f"Progresso Atual: {p_a*100:.2f}%")
                 p = st.slider("%", 0, 100, int(p_a * 100)) / 100
@@ -190,29 +176,22 @@ elif escolha == "Lançar Medição":
                 if st.form_submit_button("Registrar Medição"):
                     if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * safe_float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())}):
                         st.rerun()
-            
-            if not df_m.empty: 
-                st.subheader("📋 Últimas Medições Registradas")
-                st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])].sort_values('updated_at', ascending=False), use_container_width=True, height=200)
+            if not df_m.empty: st.dataframe(df_m[df_m['item_id'].isin(i_f['item_id'])].sort_values('updated_at', ascending=False), use_container_width=True, height=200)
 
-# --- 7. KANBAN (DEDUPLICADO) ---
+# --- 7. KANBAN ---
 elif escolha == "Kanban":
     st.title("📋 Quadro Kanban")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         sel = st.selectbox("Filtrar Contrato:", ["Todos"] + df_c['ctt'].tolist())
-        
         m_f = pd.DataFrame()
         if not df_m.empty:
             df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
             m_f = df_m.sort_values('updated_at').groupby('item_id').tail(1)
             if sel != "Todos":
-                cid = df_c[df_c['ctt'] == sel]['contract_id'].values[0]
-                m_f = m_f[m_f['item_id'].isin(df_i[df_i['contract_id'] == cid]['item_id'])]
-
+                m_f = m_f[m_f['item_id'].isin(df_i[df_i['contract_id'] == df_c[df_c['ctt'] == sel]['contract_id'].values[0]]['item_id'])]
         cols = st.columns(4)
-        fases = ["Em execução", "Medição lançada", "Aprovado", "Faturado"]
-        for i, f in enumerate(fases):
+        for i, f in enumerate(["Em execução", "Medição lançada", "Aprovado", "Faturado"]):
             with cols[i]:
                 st.subheader(f)
                 if not m_f.empty and 'fase_workflow' in m_f.columns:
@@ -224,7 +203,61 @@ elif escolha == "Kanban":
                                 st.caption(f"📑 CTT: {df_c[df_c['contract_id'] == it_row.iloc[0]['contract_id']].iloc[0]['ctt']}")
                                 st.write(f"{safe_float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
-# --- 8. CONTRATOS ---
+# --- 8. NOVA PÁGINA: RELATÓRIO (BOLETIM DE MEDIÇÃO FINANCEIRA) ---
+elif escolha == "Relatório":
+    st.title("📝 Relatório de Medição - Fabricação Terceirizada")
+    df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
+    
+    if not df_c.empty:
+        sel_ctt = st.selectbox("Selecione o Contrato para Gerar Relatório", df_c['ctt'].tolist())
+        con = df_c[df_c['ctt'] == sel_ctt].iloc[0]
+        
+        # Deduplicação para o Relatório
+        df_m_last = pd.DataFrame()
+        if not df_m.empty:
+            df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
+            df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
+        
+        itens_con = df_i[df_i['contract_id'] == con['contract_id']]
+        med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
+
+        with st.container(border=True):
+            # Cabeçalho do Relatório
+            st.markdown(f"### ANEXO I - Boletim de Medição")
+            c1, c2 = st.columns(2)
+            c1.write(f"**CTT:** {con['ctt']} - {con['fornecedor']}")
+            c1.write(f"**Valor do Contrato:** {formatar_real(con['valor_contrato'])}")
+            c1.write(f"**Obra:** {con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}")
+            c2.write(f"**Gestor:** {con.get('gestor', '-')}")
+            c2.write(f"**Início:** {formatar_data_br(con.get('data_inicio', ''))}")
+            c2.write(f"**Fim:** {formatar_data_br(con.get('data_fim', ''))}")
+            
+            st.divider()
+            
+            # Tabela de Itens Deduplicada
+            if not med_ctt.empty:
+                rel = itens_con.merge(med_ctt, on='item_id', how='left')
+                rel_view = pd.DataFrame({
+                    'Item': rel['descricao_item'],
+                    'VLR UNIT': rel['vlr_unit'].apply(formatar_real),
+                    'Medição Acumulada %': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"),
+                    'Medição Acumulada R$': rel['valor_acumulado'].apply(formatar_real)
+                })
+                st.table(rel_view)
+                
+                # Fechamento Financeiro
+                v_bruto = med_ctt['valor_acumulado'].apply(safe_float).sum()
+                v_retencao = v_bruto * 0.15
+                v_liquido = v_bruto - v_retencao
+                
+                st.divider()
+                st.write(f"**Acumulado Bruto:** {formatar_real(v_bruto)}")
+                st.write(f"**Retenção (-15%):** - {formatar_real(v_retencao)}")
+                st.markdown(f"### **Medição Financeira Líquida (-15%): {formatar_real(v_liquido)}**")
+            else:
+                st.warning("Nenhuma medição registrada para este contrato.")
+
+# --- 9. CONTRATOS ---
 elif escolha == "Contratos":
     st.title("📄 Cadastro de Contratos")
     with st.form("f_con", clear_on_submit=True):
