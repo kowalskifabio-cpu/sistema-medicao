@@ -10,9 +10,31 @@ TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
+# --- CSS PARA ALINHAMENTO DAS COLUNAS FINANCEIRAS ---
+st.markdown("""
+    <style>
+    /* Alinha células de tabelas que contêm 'R$' à direita */
+    td {
+        text-align: right !important;
+    }
+    /* Mantém a coluna de descrição (geralmente a primeira) à esquerda */
+    td:first-child {
+        text-align: left !important;
+    }
+    @media print {
+        .stSidebar, .stHeader, .stButton {
+            display: none !important;
+        }
+        .main {
+            padding: 0px !important;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # --- 2. FERRAMENTAS DE PERFORMANCE E PROTEÇÃO ---
 
-@st.cache_data(ttl=300) 
+@st.cache_data(ttl=300)
 def carregar_dados(acao):
     try:
         r = requests.get(URL_DO_APPS_SCRIPT, params={"token": TOKEN, "action": acao}, timeout=10)
@@ -58,11 +80,10 @@ def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
 
 # --- 3. MENU LATERAL ---
 st.sidebar.title("Navegação")
-# Adicionado "Relatório" ao menu
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban", "Relatório"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD (SINALIZAÇÃO 🟢🟡🔴 COM DEDUPLICAÇÃO) ---
+# --- 4. DASHBOARD ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle e Cronograma")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -126,7 +147,7 @@ if escolha == "Dashboard":
                             'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
                         }))
 
-# --- 5. ITENS (OTIMIZADO) ---
+# --- 5. ITENS ---
 elif escolha == "Itens":
     st.title("🏗️ Gestão de Itens")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -203,16 +224,15 @@ elif escolha == "Kanban":
                                 st.caption(f"📑 CTT: {df_c[df_c['contract_id'] == it_row.iloc[0]['contract_id']].iloc[0]['ctt']}")
                                 st.write(f"{safe_float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
-# --- 8. NOVA PÁGINA: RELATÓRIO (BOLETIM DE MEDIÇÃO FINANCEIRA) ---
+# --- 8. RELATÓRIO (BOLETIM FINANCEIRO + BOTAO IMPRIMIR) ---
 elif escolha == "Relatório":
-    st.title("📝 Relatório de Medição - Fabricação Terceirizada")
+    st.title("📝 Relatório de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     
     if not df_c.empty:
-        sel_ctt = st.selectbox("Selecione o Contrato para Gerar Relatório", df_c['ctt'].tolist())
+        sel_ctt = st.selectbox("Selecione o Contrato", df_c['ctt'].tolist())
         con = df_c[df_c['ctt'] == sel_ctt].iloc[0]
         
-        # Deduplicação para o Relatório
         df_m_last = pd.DataFrame()
         if not df_m.empty:
             df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
@@ -221,8 +241,11 @@ elif escolha == "Relatório":
         itens_con = df_i[df_i['contract_id'] == con['contract_id']]
         med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
 
+        # Botão para imprimir usando JavaScript
+        if st.button("🖨️ Imprimir Boletim"):
+            st.components.v1.html("<script>window.print();</script>", height=0)
+
         with st.container(border=True):
-            # Cabeçalho do Relatório
             st.markdown(f"### ANEXO I - Boletim de Medição")
             c1, c2 = st.columns(2)
             c1.write(f"**CTT:** {con['ctt']} - {con['fornecedor']}")
@@ -234,18 +257,17 @@ elif escolha == "Relatório":
             
             st.divider()
             
-            # Tabela de Itens Deduplicada
             if not med_ctt.empty:
                 rel = itens_con.merge(med_ctt, on='item_id', how='left')
                 rel_view = pd.DataFrame({
                     'Item': rel['descricao_item'],
                     'VLR UNIT': rel['vlr_unit'].apply(formatar_real),
-                    'Medição Acumulada %': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"),
-                    'Medição Acumulada R$': rel['valor_acumulado'].apply(formatar_real)
+                    'Medição %': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"),
+                    'Medição R$': rel['valor_acumulado'].apply(formatar_real)
                 })
+                # Estilizando a tabela para alinhar à direita
                 st.table(rel_view)
                 
-                # Fechamento Financeiro
                 v_bruto = med_ctt['valor_acumulado'].apply(safe_float).sum()
                 v_retencao = v_bruto * 0.15
                 v_liquido = v_bruto - v_retencao
@@ -266,6 +288,6 @@ elif escolha == "Contratos":
         fo = c1.text_input("Fornecedor"); ctt = c2.text_input("CTT")
         gs = c1.text_input("Gestor"); vl = c2.number_input("Valor Total")
         dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
-        if st.form_submit_button("Salvar Contrato"):
+        if st.form_submit_button("Salvar"):
             if salvar_dados_otimizado("contracts", {"contract_id": str(uuid.uuid4()), "cliente": cl, "ctr": ctr, "fornecedor": fo, "ctt": ctt, "gestor": gs, "valor_contrato": vl, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"}):
                 st.rerun()
