@@ -74,7 +74,7 @@ st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban", "Relatório"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD (RESTAURADO DETALHAMENTO DO BOLETIM) ---
+# --- 4. DASHBOARD ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -83,25 +83,19 @@ if escolha == "Dashboard":
         if not df_m.empty:
             df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
             df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
-        
         t_con = pd.to_numeric(df_c['valor_contrato'], errors='coerce').fillna(0).sum()
         t_med = df_m_last['valor_acumulado'].apply(safe_float).sum() if not df_m_last.empty else 0
-        
         m1, m2, m3 = st.columns(3)
         m1.metric("Total Contratado", formatar_real(t_con))
         m2.metric("Total Medido", formatar_real(t_med))
         m3.metric("Saldo Geral", formatar_real(t_con - t_med))
         st.divider()
-        
         gestor_sel = st.selectbox("Filtrar por Gestor", ["Todos"] + sorted(df_c['gestor'].unique().tolist()))
         df_f = df_c if gestor_sel == "Todos" else df_c[df_c['gestor'] == gestor_sel]
-        
         for _, con in df_f.iterrows():
             cid = con['contract_id']
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
             med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'].tolist())] if not df_m_last.empty and not itens_con.empty else pd.DataFrame()
-            
-            # Cálculo de Farol com proteção
             if med_ctt.empty: farol = "🟡"
             else:
                 atrasado = False
@@ -112,7 +106,6 @@ if escolha == "Dashboard":
                     if (pd.to_datetime(d_fim).date() - datetime.now().date()).days < 0 and safe_float(r['percentual_acumulado']) < 1:
                         atrasado = True; break
                 farol = "🔴" if atrasado else "🟢"
-            
             v_bruto = med_ctt['valor_acumulado'].apply(safe_float).sum() if not med_ctt.empty else 0
             with st.container(border=True):
                 st.markdown(f"#### {farol} {con.get('cliente', 'Cliente')} (CTR: {con.get('ctr', '-')}) | {con['fornecedor']} (CTT: {con['ctt']})")
@@ -121,20 +114,12 @@ if escolha == "Dashboard":
                 f2.metric("Retenção (15%)", f"- {formatar_real(v_bruto*0.15)}", delta_color="inverse")
                 f3.metric("Líquido (85%)", formatar_real(v_bruto*0.85))
                 f4.metric("Saldo Contrato", formatar_real(safe_float(con['valor_contrato']) - v_bruto))
-                
-                # RESTAURAÇÃO DO BOTÃO DETALHAR BOLETIM
                 if st.button(f"🔍 Detalhar Boletim {con['ctt']}", key=f"btn_det_{cid}", use_container_width=True):
                     if not med_ctt.empty:
                         rel = med_ctt.merge(itens_con[['item_id', 'descricao_item', 'vlr_unit', col_fim] if col_fim else ['item_id', 'descricao_item', 'vlr_unit']], on='item_id')
                         rel['Data Limite'] = rel[col_fim] if col_fim else con['data_fim']
                         rel['Status'] = rel.apply(lambda x: calcular_status_prazo_texto(x['Data Limite'], x['data_medicao'], x['percentual_acumulado']), axis=1)
-                        st.table(pd.DataFrame({
-                            'Item': rel['descricao_item'], 
-                            'Vlr Unit.': rel['vlr_unit'].apply(formatar_real),
-                            '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"),
-                            'Medido R$': rel['valor_acumulado'].apply(formatar_real),
-                            'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
-                        }))
+                        st.table(pd.DataFrame({'Item': rel['descricao_item'], 'Vlr Unit.': rel['vlr_unit'].apply(formatar_real), '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Medido R$': rel['valor_acumulado'].apply(formatar_real), 'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")}))
 
 # --- 5. ITENS ---
 elif escolha == "Itens":
@@ -195,7 +180,7 @@ elif escolha == "Lançar Medição":
                     if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * safe_float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())}):
                         st.rerun()
 
-# --- 7. KANBAN (RESTAURADO COM FILTRO) ---
+# --- 7. KANBAN ---
 elif escolha == "Kanban":
     st.title("📋 Quadro Kanban")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -221,12 +206,12 @@ elif escolha == "Kanban":
                                 st.caption(f"📑 CTT: {df_c[df_c['contract_id'] == it.iloc[0]['contract_id']].iloc[0]['ctt']}")
                                 st.write(f"{safe_float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
-# --- 8. RELATÓRIO (EXCEL + IMPRESSÃO) ---
+# --- 8. RELATÓRIO (MELHORIA NA EXPORTAÇÃO EXCEL) ---
 elif escolha == "Relatório":
     st.title("📝 Relatório de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
-        sel_ctt = st.selectbox("Selecione o Contrato", df_c['ctt'].tolist())
+        sel_ctt = st.selectbox("Selecione o Contrato para Gerar Relatório", df_c['ctt'].tolist())
         con = df_c[df_c['ctt'] == sel_ctt].iloc[0]
         df_m_last = pd.DataFrame()
         if not df_m.empty:
@@ -242,10 +227,44 @@ elif escolha == "Relatório":
         with c2:
             if not med_ctt.empty:
                 rel_ex = itens_con.merge(med_ctt, on='item_id', how='left')
-                df_export = pd.DataFrame({'Item': rel_ex['descricao_item'], 'Vlr Unit': rel_ex['vlr_unit'].apply(safe_float), 'Med %': rel_ex['percentual_acumulado'].apply(safe_float), 'Med R$': rel_ex['valor_acumulado'].apply(safe_float)})
+                v_bruto = rel_ex['valor_acumulado'].apply(safe_float).sum()
+                v_ret = v_bruto * 0.15
+                v_liq = v_bruto - v_ret
+
+                # --- Lógica de Excel Rico (Cabeçalho + Itens + Totais) ---
                 output = io.BytesIO()
-                df_export.to_excel(output, index=False, engine='openpyxl')
-                st.download_button(label="📥 Exportar Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    # 1. Dados do Cabeçalho
+                    df_header = pd.DataFrame([
+                        ["BOLETIM DE MEDIÇÃO", ""],
+                        ["CTR / Obra:", f"{con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}"],
+                        ["CTT / Fornecedor:", f"{con['ctt']} - {con['fornecedor']}"],
+                        ["Gestor:", con.get('gestor', '-')],
+                        ["Data de Emissão:", datetime.now().strftime('%d/%m/%Y')],
+                        ["", ""]
+                    ])
+                    df_header.to_excel(writer, index=False, header=False, sheet_name='Boletim')
+                    
+                    # 2. Dados dos Itens
+                    df_items_ex = pd.DataFrame({
+                        'Item': rel_ex['descricao_item'],
+                        'Vlr Unit (R$)': rel_ex['vlr_unit'].apply(safe_float),
+                        'Medição (%)': rel_ex['percentual_acumulado'].apply(safe_float),
+                        'Medição (R$)': rel_ex['valor_acumulado'].apply(safe_float)
+                    })
+                    df_items_ex.to_excel(writer, index=False, startrow=len(df_header), sheet_name='Boletim')
+                    
+                    # 3. Dados do Rodapé
+                    df_footer = pd.DataFrame([
+                        ["", ""],
+                        ["RESUMO FINANCEIRO", ""],
+                        ["Total Bruto Medido:", formatar_real(v_bruto)],
+                        ["Retenção (15%):", f"- {formatar_real(v_ret)}"],
+                        ["Total Líquido:", formatar_real(v_liq)]
+                    ])
+                    df_footer.to_excel(writer, index=False, header=False, startrow=len(df_header) + len(df_items_ex) + 1, sheet_name='Boletim')
+
+                st.download_button(label="📥 Exportar para Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
         with st.container(border=True):
             st.markdown(f"### ANEXO I - Boletim de Medição")
@@ -259,11 +278,11 @@ elif escolha == "Relatório":
                 rel = itens_con.merge(med_ctt, on='item_id', how='left')
                 rel_view = pd.DataFrame({'Item': rel['descricao_item'], 'VLR UNIT': rel['vlr_unit'].apply(formatar_real), 'Med %': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Med R$': rel['valor_acumulado'].apply(formatar_real)})
                 st.table(rel_view)
-                v_bruto = med_ctt['valor_acumulado'].apply(safe_float).sum()
-                v_ret = v_bruto * 0.15
+                v_bruto_view = med_ctt['valor_acumulado'].apply(safe_float).sum()
+                v_ret_view = v_bruto_view * 0.15
                 st.divider()
-                st.write(f"**Bruto:** {formatar_real(v_bruto)} | **Retenção (15%):** - {formatar_real(v_ret)}")
-                st.markdown(f"### **Líquido: {formatar_real(v_bruto - v_ret)}**")
+                st.write(f"**Bruto:** {formatar_real(v_bruto_view)} | **Retenção (15%):** - {formatar_real(v_ret_view)}")
+                st.markdown(f"### **Líquido Financeiro: {formatar_real(v_bruto_view - v_ret_view)}**")
 
 # --- 9. CONTRATOS ---
 elif escolha == "Contratos":
