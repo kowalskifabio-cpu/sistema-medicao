@@ -74,7 +74,7 @@ st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban", "Relatório"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
 
-# --- 4. DASHBOARD (CORREÇÃO DO KEYERROR) ---
+# --- 4. DASHBOARD (RESTAURADO DETALHAMENTO DO BOLETIM) ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -89,19 +89,19 @@ if escolha == "Dashboard":
         
         m1, m2, m3 = st.columns(3)
         m1.metric("Total Contratado", formatar_real(t_con))
-        m2.metric("Total Medido (Atual)", formatar_real(t_med))
+        m2.metric("Total Medido", formatar_real(t_med))
         m3.metric("Saldo Geral", formatar_real(t_con - t_med))
         st.divider()
         
-        g_sel = st.selectbox("Filtrar por Gestor", ["Todos"] + sorted(df_c['gestor'].unique().tolist()))
-        df_f = df_c if g_sel == "Todos" else df_c[df_c['gestor'] == g_sel]
+        gestor_sel = st.selectbox("Filtrar por Gestor", ["Todos"] + sorted(df_c['gestor'].unique().tolist()))
+        df_f = df_c if gestor_sel == "Todos" else df_c[df_c['gestor'] == gestor_sel]
         
         for _, con in df_f.iterrows():
             cid = con['contract_id']
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
             med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'].tolist())] if not df_m_last.empty and not itens_con.empty else pd.DataFrame()
             
-            # Lógica de Farol Tri-color com Proteção de Coluna
+            # Cálculo de Farol com proteção
             if med_ctt.empty: farol = "🟡"
             else:
                 atrasado = False
@@ -121,14 +121,28 @@ if escolha == "Dashboard":
                 f2.metric("Retenção (15%)", f"- {formatar_real(v_bruto*0.15)}", delta_color="inverse")
                 f3.metric("Líquido (85%)", formatar_real(v_bruto*0.85))
                 f4.metric("Saldo Contrato", formatar_real(safe_float(con['valor_contrato']) - v_bruto))
+                
+                # RESTAURAÇÃO DO BOTÃO DETALHAR BOLETIM
+                if st.button(f"🔍 Detalhar Boletim {con['ctt']}", key=f"btn_det_{cid}", use_container_width=True):
+                    if not med_ctt.empty:
+                        rel = med_ctt.merge(itens_con[['item_id', 'descricao_item', 'vlr_unit', col_fim] if col_fim else ['item_id', 'descricao_item', 'vlr_unit']], on='item_id')
+                        rel['Data Limite'] = rel[col_fim] if col_fim else con['data_fim']
+                        rel['Status'] = rel.apply(lambda x: calcular_status_prazo_texto(x['Data Limite'], x['data_medicao'], x['percentual_acumulado']), axis=1)
+                        st.table(pd.DataFrame({
+                            'Item': rel['descricao_item'], 
+                            'Vlr Unit.': rel['vlr_unit'].apply(formatar_real),
+                            '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"),
+                            'Medido R$': rel['valor_acumulado'].apply(formatar_real),
+                            'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")
+                        }))
 
-# --- 5. ITENS (MANTIDO COMPARATIVO FINANCEIRO) ---
+# --- 5. ITENS ---
 elif escolha == "Itens":
     st.title("🏗️ Gestão de Itens")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         df_c['list_name'] = df_c.apply(lambda x: f"{x.get('cliente', 'Sem Cliente')} / {x['fornecedor']} (CTT: {x['ctt']})", axis=1)
-        sel_ctt = st.selectbox("Escolha o Contrato", df_c['list_name'].tolist())
+        sel_ctt = st.selectbox("Contrato", df_c['list_name'].tolist())
         row_ctt = df_c[df_c['list_name'] == sel_ctt].iloc[0]
         with st.expander("➕ Novo Item"):
             with st.form("f_item", clear_on_submit=True):
@@ -153,12 +167,12 @@ elif escolha == "Itens":
             tot_l = i_f['vlr_unit'].apply(safe_float).sum()
             v_con = safe_float(row_ctt['valor_contrato'])
             with st.container(border=True):
-                st.subheader("💰 Resumo Financeiro de Lançamentos")
+                st.subheader("💰 Resumo Financeiro")
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Total Lançado", formatar_real(tot_l))
                 c2.metric("Valor Contrato", formatar_real(v_con))
-                delta = v_con - tot_l
-                c3.metric("Saldo a Lançar", formatar_real(delta), delta_color="normal" if delta >= 0 else "inverse")
+                diff = v_con - tot_l
+                c3.metric("Saldo a Lançar", formatar_real(diff), delta_color="normal" if diff >= 0 else "inverse")
                 st.progress(min(tot_l / v_con, 1.0) if v_con > 0 else 0)
 
 # --- 6. MEDIÇÃO ---
@@ -166,7 +180,7 @@ elif escolha == "Lançar Medição":
     st.title("📏 Lançamento de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
-        c_sel = st.selectbox("Selecione o Contrato", df_c['ctt'].tolist())
+        c_sel = st.selectbox("Selecione Contrato", df_c['ctt'].tolist())
         id_c = df_c[df_c['ctt'] == c_sel]['contract_id'].values[0]
         i_f = df_i[df_i['contract_id'] == id_c].copy()
         if not i_f.empty:
@@ -177,11 +191,11 @@ elif escolha == "Lançar Medição":
                 p = st.slider("%", 0, 100, int(p_a * 100)) / 100
                 dt = st.date_input("Data", format="DD/MM/YYYY")
                 fase = st.selectbox("Fase", ["Em execução", "Medição lançada", "Aprovado", "Faturado"])
-                if st.form_submit_button("Registrar Medição"):
-                    if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * safe_float(row['vlr_unit']), "fase_workflow": f"{fase}", "updated_at": str(datetime.now())}):
+                if st.form_submit_button("Registrar"):
+                    if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * safe_float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())}):
                         st.rerun()
 
-# --- 7. KANBAN (COM FILTRO DE CONTRATO RESTAURADO) ---
+# --- 7. KANBAN (RESTAURADO COM FILTRO) ---
 elif escolha == "Kanban":
     st.title("📋 Quadro Kanban")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -207,7 +221,7 @@ elif escolha == "Kanban":
                                 st.caption(f"📑 CTT: {df_c[df_c['contract_id'] == it.iloc[0]['contract_id']].iloc[0]['ctt']}")
                                 st.write(f"{safe_float(card['percentual_acumulado'])*100:.0f}% | {formatar_real(card['valor_acumulado'])}")
 
-# --- 8. RELATÓRIO (MANTIDO BOTÃO EXCEL E IMPRESSÃO) ---
+# --- 8. RELATÓRIO (EXCEL + IMPRESSÃO) ---
 elif escolha == "Relatório":
     st.title("📝 Relatório de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
@@ -231,7 +245,7 @@ elif escolha == "Relatório":
                 df_export = pd.DataFrame({'Item': rel_ex['descricao_item'], 'Vlr Unit': rel_ex['vlr_unit'].apply(safe_float), 'Med %': rel_ex['percentual_acumulado'].apply(safe_float), 'Med R$': rel_ex['valor_acumulado'].apply(safe_float)})
                 output = io.BytesIO()
                 df_export.to_excel(output, index=False, engine='openpyxl')
-                st.download_button(label="📥 Exportar para Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.download_button(label="📥 Exportar Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
         with st.container(border=True):
             st.markdown(f"### ANEXO I - Boletim de Medição")
@@ -249,7 +263,7 @@ elif escolha == "Relatório":
                 v_ret = v_bruto * 0.15
                 st.divider()
                 st.write(f"**Bruto:** {formatar_real(v_bruto)} | **Retenção (15%):** - {formatar_real(v_ret)}")
-                st.markdown(f"### **Líquido Financeiro: {formatar_real(v_bruto - v_ret)}**")
+                st.markdown(f"### **Líquido: {formatar_real(v_bruto - v_ret)}**")
 
 # --- 9. CONTRATOS ---
 elif escolha == "Contratos":
