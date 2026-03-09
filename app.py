@@ -11,6 +11,39 @@ TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
+# --- BANCO DE DADOS DE USUÁRIOS (BASEADO NO ANEXO) ---
+USUARIOS = {
+    "FABIO COSTA": "Fstatus@2",
+    "LUIZ FERNANDO": "Lfstatus@2",
+    "AURÉLIO": "Astatus@2",
+    "DENISON EDUARDO DE LIMA": "DELstatus",
+    "GILBERTO": "Gstatus@2",
+    "PAULO ARRUDA": "Pastatus@2",
+    "ADM": "Dstatus@2"
+}
+
+# --- SISTEMA DE LOGIN ---
+if "logado" not in st.session_state:
+    st.session_state.logado = False
+    st.session_state.usuario = None
+
+def login():
+    st.title("🔐 Acesso Gestão de Medições")
+    with st.form("form_login"):
+        user = st.selectbox("Selecione o Gestor", list(USUARIOS.keys()))
+        senha = st.text_input("Senha", type="password")
+        if st.form_submit_button("Entrar"):
+            if USUARIOS.get(user) == senha:
+                st.session_state.logado = True
+                st.session_state.usuario = user
+                st.rerun()
+            else:
+                st.error("Senha incorreta!")
+    st.stop()
+
+if not st.session_state.logado:
+    login()
+
 # --- CSS PARA ALINHAMENTO E IMPRESSÃO ---
 st.markdown("""
     <style>
@@ -70,18 +103,25 @@ def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
     except: return "Sem dados", "⚪"
 
 # --- 3. MENU LATERAL ---
-st.sidebar.title("Navegação")
-menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban", "Relatório", "📁 CTRs Concluídas"]
-escolha = st.sidebar.selectbox("Ir para:", menu)
+with st.sidebar:
+    st.write(f"👤 Usuário: **{st.session_state.usuario}**")
+    if st.button("Sair"):
+        st.session_state.logado = False
+        st.rerun()
+    st.title("Navegação")
+    menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban", "Relatório", "📁 CTRs Concluídas"]
+    escolha = st.sidebar.selectbox("Ir para:", menu)
 
 # --- 4. DASHBOARD ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle (Ativos)")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     
-    # Filtrar apenas Ativos para o Dashboard operacional
     if not df_c.empty:
         df_c = df_c[df_c['status'] == 'Ativo']
+        # FILTRO DE SEGURANÇA POR GESTOR
+        if st.session_state.usuario != "ADM":
+            df_c = df_c[df_c['gestor'] == st.session_state.usuario]
         
     if not df_c.empty:
         df_m_last = pd.DataFrame()
@@ -98,9 +138,13 @@ if escolha == "Dashboard":
         m3.metric("Saldo Geral", formatar_real(t_con - t_med))
         st.divider()
         
-        gestor_sel = st.selectbox("Filtrar por Gestor", ["Todos"] + sorted(df_c['gestor'].unique().tolist()))
-        df_f = df_c if gestor_sel == "Todos" else df_c[df_c['gestor'] == gestor_sel]
-        
+        # Filtro de gestor para ADM, para Gestor é fixo
+        if st.session_state.usuario == "ADM":
+            gestor_sel = st.selectbox("Filtrar por Gestor", ["Todos"] + sorted(df_c['gestor'].unique().tolist()))
+            df_f = df_c if gestor_sel == "Todos" else df_c[df_c['gestor'] == gestor_sel]
+        else:
+            df_f = df_c
+
         for _, con in df_f.iterrows():
             cid = con['contract_id']
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
@@ -144,6 +188,10 @@ elif escolha == "Itens":
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         df_c = df_c[df_c['status'] == 'Ativo']
+        # FILTRO DE SEGURANÇA
+        if st.session_state.usuario != "ADM":
+            df_c = df_c[df_c['gestor'] == st.session_state.usuario]
+        
         df_c['list_name'] = df_c.apply(lambda x: f"{x.get('cliente', 'Sem Cliente')} / {x['fornecedor']} (CTT: {x['ctt']})", axis=1)
         if not df_c.empty:
             sel_ctt = st.selectbox("Contrato", df_c['list_name'].tolist())
@@ -185,6 +233,10 @@ elif escolha == "Lançar Medição":
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         df_c = df_c[df_c['status'] == 'Ativo']
+        # FILTRO DE SEGURANÇA
+        if st.session_state.usuario != "ADM":
+            df_c = df_c[df_c['gestor'] == st.session_state.usuario]
+        
         if not df_c.empty:
             c_sel = st.selectbox("Selecione Contrato", df_c['ctt'].tolist())
             id_c = df_c[df_c['ctt'] == c_sel]['contract_id'].values[0]
@@ -207,6 +259,10 @@ elif escolha == "Kanban":
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         df_c = df_c[df_c['status'] == 'Ativo']
+        # FILTRO DE SEGURANÇA
+        if st.session_state.usuario != "ADM":
+            df_c = df_c[df_c['gestor'] == st.session_state.usuario]
+            
         sel = st.selectbox("Filtrar por Contrato:", ["Todos"] + df_c['ctt'].tolist())
         m_f = pd.DataFrame()
         if not df_m.empty:
@@ -215,6 +271,9 @@ elif escolha == "Kanban":
             if sel != "Todos" and not df_c.empty:
                 cid = df_c[df_c['ctt'] == sel]['contract_id'].values[0]
                 m_f = m_f[m_f['item_id'].isin(df_i[df_i['contract_id'] == cid]['item_id'])]
+            else:
+                m_f = m_f[m_f['item_id'].isin(df_i[df_i['contract_id'].isin(df_c['contract_id'])]['item_id'])]
+
         cols = st.columns(4)
         for i, f in enumerate(["Em execução", "Medição lançada", "Aprovado", "Faturado"]):
             with cols[i]:
@@ -234,65 +293,72 @@ elif escolha == "Relatório":
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         df_at = df_c[df_c['status'] == 'Ativo']
-        sel_ctt = st.selectbox("Selecione o Contrato para Gerar Relatório", df_at['ctt'].tolist())
-        con = df_at[df_at['ctt'] == sel_ctt].iloc[0]
-        df_m_last = pd.DataFrame()
-        if not df_m.empty:
-            df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
-            df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
-        itens_con = df_i[df_i['contract_id'] == con['contract_id']]
-        med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
+        # FILTRO DE SEGURANÇA
+        if st.session_state.usuario != "ADM":
+            df_at = df_at[df_at['gestor'] == st.session_state.usuario]
+            
+        if not df_at.empty:
+            sel_ctt = st.selectbox("Selecione o Contrato para Gerar Relatório", df_at['ctt'].tolist())
+            con = df_at[df_at['ctt'] == sel_ctt].iloc[0]
+            df_m_last = pd.DataFrame()
+            if not df_m.empty:
+                df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
+                df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
+            itens_con = df_i[df_i['contract_id'] == con['contract_id']]
+            med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
 
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🖨️ Imprimir Boletim", use_container_width=True):
-                st.components.v1.html("<script>window.print();</script>", height=0)
-        with c2:
-            if not med_ctt.empty:
-                rel_ex = itens_con.merge(med_ctt, on='item_id', how='left')
-                v_bruto = rel_ex['valor_acumulado'].apply(safe_float).sum()
-                v_ret = v_bruto * 0.15
-                v_liq = v_bruto - v_ret
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_header = pd.DataFrame([["BOLETIM DE MEDIÇÃO", ""], ["CTR / Obra:", f"{con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}"], ["CTT / Fornecedor:", f"{con['ctt']} - {con['fornecedor']}"], ["Gestor:", con.get('gestor', '-')], ["Data de Emissão:", datetime.now().strftime('%d/%m/%Y')], ["", ""]])
-                    df_header.to_excel(writer, index=False, header=False, sheet_name='Boletim')
-                    df_items_ex = pd.DataFrame({'Item': rel_ex['descricao_item'], 'Vlr Unit (R$)': rel_ex['vlr_unit'].apply(safe_float), 'Medição (%)': rel_ex['percentual_acumulado'].apply(safe_float), 'Medição (R$)': rel_ex['valor_acumulado'].apply(safe_float)})
-                    df_items_ex.to_excel(writer, index=False, startrow=len(df_header), sheet_name='Boletim')
-                    df_footer = pd.DataFrame([["", ""], ["RESUMO FINANCEIRO", ""], ["Total Bruto Medido:", formatar_real(v_bruto)], ["Retenção (15%):", f"- {formatar_real(v_ret)}"], ["Total Líquido:", formatar_real(v_liq)]])
-                    df_footer.to_excel(writer, index=False, header=False, startrow=len(df_header) + len(df_items_ex) + 1, sheet_name='Boletim')
-                st.download_button(label="📥 Exportar para Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-
-        with st.container(border=True):
-            st.markdown(f"### ANEXO I - Boletim de Medição")
             c1, c2 = st.columns(2)
-            c1.write(f"**CTT:** {con['ctt']} - {con['fornecedor']}")
-            c1.write(f"**Obra:** {con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}")
-            c2.write(f"**Gestor:** {con.get('gestor', '-')}")
-            c2.write(f"**Fim:** {formatar_data_br(con.get('data_fim', ''))}")
-            st.divider()
-            if not med_ctt.empty:
-                rel = itens_con.merge(med_ctt, on='item_id', how='left')
-                rel_view = pd.DataFrame({'Item': rel['descricao_item'], 'VLR UNIT': rel['vlr_unit'].apply(formatar_real), 'Med %': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Med R$': rel['valor_acumulado'].apply(formatar_real)})
-                st.table(rel_view)
-                v_bruto_view = med_ctt['valor_acumulado'].apply(safe_float).sum(); v_ret_view = v_bruto_view * 0.15
-                st.divider()
-                st.write(f"**Bruto:** {formatar_real(v_bruto_view)} | **Retenção (15%):** - {formatar_real(v_ret_view)}")
-                st.markdown(f"### **Líquido Financeiro: {formatar_real(v_bruto_view - v_ret_view)}**")
+            with c1:
+                if st.button("🖨️ Imprimir Boletim", use_container_width=True):
+                    st.components.v1.html("<script>window.print();</script>", height=0)
+            with c2:
+                if not med_ctt.empty:
+                    rel_ex = itens_con.merge(med_ctt, on='item_id', how='left')
+                    v_bruto = rel_ex['valor_acumulado'].apply(safe_float).sum()
+                    v_ret = v_bruto * 0.15; v_liq = v_bruto - v_ret
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        df_header = pd.DataFrame([["BOLETIM DE MEDIÇÃO", ""], ["CTR / Obra:", f"{con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}"], ["CTT / Fornecedor:", f"{con['ctt']} - {con['fornecedor']}"], ["Gestor:", con.get('gestor', '-')], ["Data de Emissão:", datetime.now().strftime('%d/%m/%Y')], ["", ""]])
+                        df_header.to_excel(writer, index=False, header=False, sheet_name='Boletim')
+                        df_items_ex = pd.DataFrame({'Item': rel_ex['descricao_item'], 'Vlr Unit (R$)': rel_ex['vlr_unit'].apply(safe_float), 'Medição (%)': rel_ex['percentual_acumulado'].apply(safe_float), 'Medição (R$)': rel_ex['valor_acumulado'].apply(safe_float)})
+                        df_items_ex.to_excel(writer, index=False, startrow=len(df_header), sheet_name='Boletim')
+                        df_footer = pd.DataFrame([["", ""], ["RESUMO FINANCEIRO", ""], ["Total Bruto Medido:", formatar_real(v_bruto)], ["Retenção (15%):", f"- {formatar_real(v_ret)}"], ["Total Líquido:", formatar_real(v_liq)]])
+                        df_footer.to_excel(writer, index=False, header=False, startrow=len(df_header) + len(df_items_ex) + 1, sheet_name='Boletim')
+                    st.download_button(label="📥 Exportar para Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-# --- 9. CTRs CONCLUÍDAS (NOVO MENU) ---
+            with st.container(border=True):
+                st.markdown(f"### ANEXO I - Boletim de Medição")
+                c1, c2 = st.columns(2)
+                c1.write(f"**CTT:** {con['ctt']} - {con['fornecedor']}")
+                c1.write(f"**Obra:** {con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}")
+                c2.write(f"**Gestor:** {con.get('gestor', '-')}")
+                c2.write(f"**Fim:** {formatar_data_br(con.get('data_fim', ''))}")
+                st.divider()
+                if not med_ctt.empty:
+                    rel = itens_con.merge(med_ctt, on='item_id', how='left')
+                    rel_view = pd.DataFrame({'Item': rel['descricao_item'], 'VLR UNIT': rel['vlr_unit'].apply(formatar_real), 'Med %': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Med R$': rel['valor_acumulado'].apply(formatar_real)})
+                    st.table(rel_view)
+                    v_bruto_view = med_ctt['valor_acumulado'].apply(safe_float).sum(); v_ret_view = v_bruto_view * 0.15
+                    st.divider()
+                    st.write(f"**Bruto:** {formatar_real(v_bruto_view)} | **Retenção (15%):** - {formatar_real(v_ret_view)}")
+                    st.markdown(f"### **Líquido Financeiro: {formatar_real(v_bruto_view - v_ret_view)}**")
+
+# --- 9. CTRs CONCLUÍDAS ---
 elif escolha == "📁 CTRs Concluídas":
     st.title("📂 Histórico de CTRs Concluídas")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         df_done = df_c[df_c['status'] == 'Concluído']
+        # FILTRO DE SEGURANÇA
+        if st.session_state.usuario != "ADM":
+            df_done = df_done[df_done['gestor'] == st.session_state.usuario]
+            
         if df_done.empty:
             st.info("Nenhuma CTR concluída no histórico.")
         else:
             sel_hist = st.selectbox("Selecione a CTR para visualizar o fechamento", df_done['ctt'].tolist())
             con = df_done[df_done['ctt'] == sel_hist].iloc[0]
             
-            # Reutiliza a lógica de visualização e exportação do Relatório para manter consistência total
             df_m_last = pd.DataFrame()
             if not df_m.empty:
                 df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
@@ -330,13 +396,17 @@ elif escolha == "📁 CTRs Concluídas":
 
 # --- 10. CONTRATOS ---
 elif escolha == "Contratos":
-    st.title("📄 Cadastro de Contratos")
-    with st.form("f_con", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        cl = c1.text_input("Cliente"); ctr = c2.text_input("CTR")
-        fo = c1.text_input("Fornecedor"); ctt = c2.text_input("CTT")
-        gs = c1.text_input("Gestor"); vl = c2.number_input("Valor Total")
-        dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
-        if st.form_submit_button("Salvar"):
-            if salvar_dados_otimizado("contracts", {"contract_id": str(uuid.uuid4()), "cliente": cl, "ctr": ctr, "fornecedor": fo, "ctt": ctt, "gestor": gs, "valor_contrato": vl, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"}):
-                st.rerun()
+    if st.session_state.usuario != "ADM":
+        st.warning("⚠️ Apenas o Administrador pode cadastrar novos contratos.")
+    else:
+        st.title("📄 Cadastro de Contratos")
+        with st.form("f_con", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            cl = c1.text_input("Cliente"); ctr = c2.text_input("CTR")
+            fo = c1.text_input("Fornecedor"); ctt = c2.text_input("CTT")
+            gs = st.selectbox("Gestor Responsável", [k for k in USUARIOS.keys() if k != "ADM"])
+            vl = c2.number_input("Valor Total")
+            dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
+            if st.form_submit_button("Salvar"):
+                if salvar_dados_otimizado("contracts", {"contract_id": str(uuid.uuid4()), "cliente": cl, "ctr": ctr, "fornecedor": fo, "ctt": ctt, "gestor": gs, "valor_contrato": vl, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"}):
+                    st.rerun()
