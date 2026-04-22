@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 import uuid
 import io
+import pdfplumber
+import re
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÕES ---
@@ -10,6 +12,33 @@ URL_DO_APPS_SCRIPT = "https://script.google.com/macros/s/AKfycbzgnCmVZURdpN6LF54
 TOKEN = "CHAVE_SEGURA_123"
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
+
+# --- FUNÇÃO DE LEITURA DE PDF (Extração Inteligente) ---
+def extrair_dados_ctt(pdf_file):
+    dados = {"itens": []}
+    with pdfplumber.open(pdf_file) as pdf:
+        texto_completo = ""
+        for page in pdf.pages:
+            texto_completo += page.extract_text() + "\n"
+        
+        ctt_match = re.search(r'Número:\s*"?(\d+)', texto_completo)
+        cliente_match = re.search(r'STATUS\s+MARCENARIA', texto_completo)
+        fornecedor_match = re.search(r'Nome:\s*\n\n(.*?)\n\nCONTRATADO', texto_completo, re.DOTALL)
+        
+        if ctt_match: dados["ctt"] = ctt_match.group(1)
+        if cliente_match: dados["cliente"] = "STATUS MARCENARIA"
+        if fornecedor_match: dados["fornecedor"] = fornecedor_match.group(1).strip()
+        
+        item_regex = r"ITEM\s+\d+[- ]+(.*?)\s*-\s*R\$\s*([\d.,]+)"
+        itens_encontrados = re.findall(item_regex, texto_completo)
+        
+        valor_total = 0.0
+        for desc, valor in itens_encontrados:
+            v_float = float(valor.replace('.', '').replace(',', '.'))
+            dados["itens"].append({"desc": desc.strip(), "valor": v_float})
+            valor_total += v_float
+        dados["valor_total"] = valor_total
+    return dados
 
 # --- CSS PARA ALINHAMENTO E IMPRESSÃO ---
 st.markdown("""
@@ -78,45 +107,27 @@ escolha = st.sidebar.selectbox("Ir para:", menu)
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle (Ativos)")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
-    
-    # Filtrar apenas Ativos para o Dashboard operacional
     if not df_c.empty:
         df_c = df_c[df_c['status'] == 'Ativo']
-        
     if not df_c.empty:
         df_m_last = pd.DataFrame()
         if not df_m.empty:
             df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
             df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
-        
         t_con = pd.to_numeric(df_c['valor_contrato'], errors='coerce').fillna(0).sum()
         t_med = df_m_last[df_m_last['item_id'].isin(df_i[df_i['contract_id'].isin(df_c['contract_id'])]['item_id'])]['valor_acumulado'].apply(safe_float).sum() if not df_m_last.empty else 0
-        
         m1, m2, m3 = st.columns(3)
         m1.metric("Total Contratado", formatar_real(t_con))
         m2.metric("Total Medido", formatar_real(t_med))
         m3.metric("Saldo Geral", formatar_real(t_con - t_med))
         st.divider()
-        
         gestor_sel = st.selectbox("Filtrar por Gestor", ["Todos"] + sorted(df_c['gestor'].unique().tolist()))
         df_f = df_c if gestor_sel == "Todos" else df_c[df_c['gestor'] == gestor_sel]
-        
         for _, con in df_f.iterrows():
             cid = con['contract_id']
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
             med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'].tolist())] if not df_m_last.empty and not itens_con.empty else pd.DataFrame()
-            
-            if med_ctt.empty: farol = "🟡"
-            else:
-                atrasado = False
-                col_fim = 'data_fim_item' if 'data_fim_item' in itens_con.columns else None
-                rel_check = med_ctt.merge(itens_con[['item_id', col_fim]] if col_fim else itens_con[['item_id']], on='item_id')
-                for _, r in rel_check.iterrows():
-                    d_fim = r.get('data_fim_item', con['data_fim'])
-                    if (pd.to_datetime(d_fim).date() - datetime.now().date()).days < 0 and safe_float(r['percentual_acumulado']) < 1:
-                        atrasado = True; break
-                farol = "🔴" if atrasado else "🟢"
-            
+            farol = "🟡" if med_ctt.empty else ("🔴" if any((pd.to_datetime(r.get('data_fim_item', con['data_fim'])).date() - datetime.now().date()).days < 0 and safe_float(r['percentual_acumulado']) < 1 for _, r in med_ctt.merge(itens_con, on='item_id').iterrows()) else "🟢")
             v_bruto = med_ctt['valor_acumulado'].apply(safe_float).sum() if not med_ctt.empty else 0
             with st.container(border=True):
                 st.markdown(f"#### {farol} {con.get('cliente', 'Cliente')} (CTR: {con.get('ctr', '-')}) | {con['fornecedor']} (CTT: {con['ctt']})")
@@ -125,18 +136,13 @@ if escolha == "Dashboard":
                 f2.metric("Retenção (15%)", f"- {formatar_real(v_bruto*0.15)}", delta_color="inverse")
                 f3.metric("Líquido (85%)", formatar_real(v_bruto*0.85))
                 f4.metric("Saldo Contrato", formatar_real(safe_float(con['valor_contrato']) - v_bruto))
-                
                 c1, c2 = st.columns([4,1])
                 if c1.button(f"🔍 Detalhar Boletim {con['ctt']}", key=f"btn_det_{cid}", use_container_width=True):
                     if not med_ctt.empty:
-                        rel = med_ctt.merge(itens_con[['item_id', 'descricao_item', 'vlr_unit', col_fim] if col_fim else ['item_id', 'descricao_item', 'vlr_unit']], on='item_id')
-                        rel['Data Limite'] = rel[col_fim] if col_fim else con['data_fim']
-                        rel['Status'] = rel.apply(lambda x: calcular_status_prazo_texto(x['Data Limite'], x['data_medicao'], x['percentual_acumulado']), axis=1)
-                        st.table(pd.DataFrame({'Item': rel['descricao_item'], 'Vlr Unit.': rel['vlr_unit'].apply(formatar_real), '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Medido R$': rel['valor_acumulado'].apply(formatar_real), 'Status': rel['Status'].apply(lambda x: f"{x[1]} {x[0]}")}))
-                
-                if c2.button("✅ Concluir", key=f"btn_done_{cid}", help="Arquivar esta CTR como concluída", use_container_width=True):
-                    if salvar_dados_otimizado("contracts", {"status": "Concluído"}, "update", "contract_id", cid):
-                        st.rerun()
+                        rel = med_ctt.merge(itens_con, on='item_id')
+                        st.table(pd.DataFrame({'Item': rel['descricao_item'], 'Vlr Unit.': rel['vlr_unit'].apply(formatar_real), '% Acum.': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Medido R$': rel['valor_acumulado'].apply(formatar_real)}))
+                if c2.button("✅ Concluir", key=f"btn_done_{cid}", use_container_width=True):
+                    if salvar_dados_otimizado("contracts", {"status": "Concluído"}, "update", "contract_id", cid): st.rerun()
 
 # --- 5. ITENS ---
 elif escolha == "Itens":
@@ -154,8 +160,7 @@ elif escolha == "Itens":
                     desc = c1.text_input("Descrição"); v_u = c2.number_input("Vlr Unit", min_value=0.0)
                     dt = st.date_input("Prazo", pd.to_datetime(row_ctt['data_fim']).date())
                     if st.form_submit_button("Salvar Item"):
-                        if salvar_dados_otimizado("items", {"item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt)}):
-                            st.rerun()
+                        if salvar_dados_otimizado("items", {"item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt)}): st.rerun()
             if not df_i.empty:
                 i_f = df_i[df_i['contract_id'] == row_ctt['contract_id']]
                 for _, item in i_f.iterrows():
@@ -167,17 +172,6 @@ elif escolha == "Itens":
                             salvar_dados_otimizado("items", {"descricao_item": n_d, "vlr_unit": n_v}, "update", "item_id", item['item_id']); st.rerun()
                         if (item['item_id'] not in df_m['item_id'].values if not df_m.empty else True) and c4.button("🗑️", key=f"del_{item['item_id']}"):
                             salvar_dados_otimizado("items", {}, "delete", "item_id", item['item_id']); st.rerun()
-                st.divider()
-                tot_l = i_f['vlr_unit'].apply(safe_float).sum()
-                v_con = safe_float(row_ctt['valor_contrato'])
-                with st.container(border=True):
-                    st.subheader("💰 Resumo Financeiro")
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Total Lançado", formatar_real(tot_l))
-                    c2.metric("Valor Contrato", formatar_real(v_con))
-                    diff = v_con - tot_l
-                    c3.metric("Saldo a Lançar", formatar_real(diff), delta_color="normal" if diff >= 0 else "inverse")
-                    st.progress(min(tot_l / v_con, 1.0) if v_con > 0 else 0)
 
 # --- 6. MEDIÇÃO ---
 elif escolha == "Lançar Medição":
@@ -198,8 +192,7 @@ elif escolha == "Lançar Medição":
                     dt = st.date_input("Data", format="DD/MM/YYYY")
                     fase = st.selectbox("Fase", ["Em execução", "Medição lançada", "Aprovado", "Faturado"])
                     if st.form_submit_button("Registrar"):
-                        if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * safe_float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())}):
-                            st.rerun()
+                        if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * safe_float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())}): st.rerun()
 
 # --- 7. KANBAN ---
 elif escolha == "Kanban":
@@ -212,17 +205,17 @@ elif escolha == "Kanban":
         if not df_m.empty:
             df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
             m_f = df_m.sort_values('updated_at').groupby('item_id').tail(1)
-            if sel != "Todos" and not df_c.empty:
+            if sel != "Todos":
                 cid = df_c[df_c['ctt'] == sel]['contract_id'].values[0]
                 m_f = m_f[m_f['item_id'].isin(df_i[df_i['contract_id'] == cid]['item_id'])]
         cols = st.columns(4)
         for i, f in enumerate(["Em execução", "Medição lançada", "Aprovado", "Faturado"]):
             with cols[i]:
                 st.subheader(f)
-                if not m_f.empty and 'fase_workflow' in m_f.columns:
+                if not m_f.empty:
                     for _, card in m_f[m_f['fase_workflow'] == f].iterrows():
                         it = df_i[df_i['item_id'] == card['item_id']]
-                        if not it.empty and it.iloc[0]['contract_id'] in df_c['contract_id'].values:
+                        if not it.empty:
                             with st.container(border=True):
                                 st.write(f"**{it.iloc[0]['descricao_item']}**")
                                 st.caption(f"📑 CTT: {df_c[df_c['contract_id'] == it.iloc[0]['contract_id']].iloc[0]['ctt']}")
@@ -234,7 +227,7 @@ elif escolha == "Relatório":
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         df_at = df_c[df_c['status'] == 'Ativo']
-        sel_ctt = st.selectbox("Selecione o Contrato para Gerar Relatório", df_at['ctt'].tolist())
+        sel_ctt = st.selectbox("Selecione o Contrato", df_at['ctt'].tolist())
         con = df_at[df_at['ctt'] == sel_ctt].iloc[0]
         df_m_last = pd.DataFrame()
         if not df_m.empty:
@@ -242,101 +235,75 @@ elif escolha == "Relatório":
             df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
         itens_con = df_i[df_i['contract_id'] == con['contract_id']]
         med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
-
+        
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("🖨️ Imprimir Boletim", use_container_width=True):
-                st.components.v1.html("<script>window.print();</script>", height=0)
+            if st.button("🖨️ Imprimir", use_container_width=True): st.components.v1.html("<script>window.print();</script>", height=0)
         with c2:
             if not med_ctt.empty:
                 rel_ex = itens_con.merge(med_ctt, on='item_id', how='left')
-                v_bruto = rel_ex['valor_acumulado'].apply(safe_float).sum()
-                v_ret = v_bruto * 0.15
-                v_liq = v_bruto - v_ret
+                v_bruto = rel_ex['valor_acumulado'].apply(safe_float).sum(); v_ret = v_bruto * 0.15; v_liq = v_bruto - v_ret
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_header = pd.DataFrame([["BOLETIM DE MEDIÇÃO", ""], ["CTR / Obra:", f"{con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}"], ["CTT / Fornecedor:", f"{con['ctt']} - {con['fornecedor']}"], ["Gestor:", con.get('gestor', '-')], ["Data de Emissão:", datetime.now().strftime('%d/%m/%Y')], ["", ""]])
+                    df_header = pd.DataFrame([["BOLETIM", ""], ["Obra:", f"{con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}"], ["Data:", datetime.now().strftime('%d/%m/%Y')]])
                     df_header.to_excel(writer, index=False, header=False, sheet_name='Boletim')
-                    df_items_ex = pd.DataFrame({'Item': rel_ex['descricao_item'], 'Vlr Unit (R$)': rel_ex['vlr_unit'].apply(safe_float), 'Medição (%)': rel_ex['percentual_acumulado'].apply(safe_float), 'Medição (R$)': rel_ex['valor_acumulado'].apply(safe_float)})
+                    df_items_ex = pd.DataFrame({'Item': rel_ex['descricao_item'], 'Vlr Unit': rel_ex['vlr_unit'].apply(safe_float), 'Med %': rel_ex['percentual_acumulado'].apply(safe_float), 'Med R$': rel_ex['valor_acumulado'].apply(safe_float)})
                     df_items_ex.to_excel(writer, index=False, startrow=len(df_header), sheet_name='Boletim')
-                    df_footer = pd.DataFrame([["", ""], ["RESUMO FINANCEIRO", ""], ["Total Bruto Medido:", formatar_real(v_bruto)], ["Retenção (15%):", f"- {formatar_real(v_ret)}"], ["Total Líquido:", formatar_real(v_liq)]])
-                    df_footer.to_excel(writer, index=False, header=False, startrow=len(df_header) + len(df_items_ex) + 1, sheet_name='Boletim')
-                st.download_button(label="📥 Exportar para Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.download_button(label="📥 Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", use_container_width=True)
 
-        with st.container(border=True):
-            st.markdown(f"### ANEXO I - Boletim de Medição")
-            c1, c2 = st.columns(2)
-            c1.write(f"**CTT:** {con['ctt']} - {con['fornecedor']}")
-            c1.write(f"**Obra:** {con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}")
-            c2.write(f"**Gestor:** {con.get('gestor', '-')}")
-            c2.write(f"**Fim:** {formatar_data_br(con.get('data_fim', ''))}")
-            st.divider()
-            if not med_ctt.empty:
-                rel = itens_con.merge(med_ctt, on='item_id', how='left')
-                rel_view = pd.DataFrame({'Item': rel['descricao_item'], 'VLR UNIT': rel['vlr_unit'].apply(formatar_real), 'Med %': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Med R$': rel['valor_acumulado'].apply(formatar_real)})
-                st.table(rel_view)
-                v_bruto_view = med_ctt['valor_acumulado'].apply(safe_float).sum(); v_ret_view = v_bruto_view * 0.15
-                st.divider()
-                st.write(f"**Bruto:** {formatar_real(v_bruto_view)} | **Retenção (15%):** - {formatar_real(v_ret_view)}")
-                st.markdown(f"### **Líquido Financeiro: {formatar_real(v_bruto_view - v_ret_view)}**")
-
-# --- 9. CTRs CONCLUÍDAS (NOVO MENU) ---
+# --- 9. CTRs CONCLUÍDAS (FUNÇÃO DE REABERTURA) ---
 elif escolha == "📁 CTRs Concluídas":
     st.title("📂 Histórico de CTRs Concluídas")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
         df_done = df_c[df_c['status'] == 'Concluído']
-        if df_done.empty:
-            st.info("Nenhuma CTR concluída no histórico.")
+        if df_done.empty: st.info("Nenhuma CTR concluída.")
         else:
-            sel_hist = st.selectbox("Selecione a CTR para visualizar o fechamento", df_done['ctt'].tolist())
+            sel_hist = st.selectbox("Selecione para visualizar ou REABRIR", df_done['ctt'].tolist())
             con = df_done[df_done['ctt'] == sel_hist].iloc[0]
+            cid = con['contract_id']
             
-            # Reutiliza a lógica de visualização e exportação do Relatório para manter consistência total
+            # BLOCO DE REABERTURA
+            st.warning("⚠️ Deseja reativar esta CTR para novos lançamentos?")
+            if st.button("🔄 Reabrir Contrato (Voltar para Ativos)", use_container_width=True):
+                if salvar_dados_otimizado("contracts", {"status": "Ativo"}, "update", "contract_id", cid):
+                    st.success(f"Contrato {con['ctt']} reativado!")
+                    st.rerun()
+            st.divider()
+
             df_m_last = pd.DataFrame()
             if not df_m.empty:
                 df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
                 df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
-            
             itens_con = df_i[df_i['contract_id'] == con['contract_id']]
             med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("🖨️ Imprimir Fechamento", use_container_width=True):
-                    st.components.v1.html("<script>window.print();</script>", height=0)
-            with c2:
-                if not med_ctt.empty:
-                    rel_ex = itens_con.merge(med_ctt, on='item_id', how='left')
-                    v_bruto = rel_ex['valor_acumulado'].apply(safe_float).sum()
-                    v_ret = v_bruto * 0.15; v_liq = v_bruto - v_ret
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df_header = pd.DataFrame([["FECHAMENTO DE CTR CONCLUÍDA", ""], ["CTR / Obra:", f"{con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}"], ["CTT / Fornecedor:", f"{con['ctt']} - {con['fornecedor']}"], ["Gestor:", con.get('gestor', '-')], ["Data de Conclusão:", formatar_data_br(datetime.now())], ["", ""]])
-                        df_header.to_excel(writer, index=False, header=False, sheet_name='Boletim')
-                        df_items_ex = pd.DataFrame({'Item': rel_ex['descricao_item'], 'Vlr Unit (R$)': rel_ex['vlr_unit'].apply(safe_float), 'Medição Final (%)': rel_ex['percentual_acumulado'].apply(safe_float), 'Medição Final (R$)': rel_ex['valor_acumulado'].apply(safe_float)})
-                        df_items_ex.to_excel(writer, index=False, startrow=len(df_header), sheet_name='Boletim')
-                        df_footer = pd.DataFrame([["", ""], ["RESUMO FINANCEIRO FINAL", ""], ["Total Bruto:", formatar_real(v_bruto)], ["Retenção (15%):", f"- {formatar_real(v_ret)}"], ["Total Líquido Pago:", formatar_real(v_liq)]])
-                        df_footer.to_excel(writer, index=False, header=False, startrow=len(df_header) + len(df_items_ex) + 1, sheet_name='Boletim')
-                    st.download_button(label="📥 Exportar Excel de Fechamento", data=output.getvalue(), file_name=f"Fechamento_{con['ctt']}.xlsx", use_container_width=True)
+            if not med_ctt.empty:
+                rel = itens_con.merge(med_ctt, on='item_id', how='left')
+                st.table(pd.DataFrame({'Item': rel['descricao_item'], 'Med % Final': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Med R$ Final': rel['valor_acumulado'].apply(formatar_real)}))
 
-            with st.container(border=True):
-                st.subheader(f"🏁 Dados de Conclusão - {con['fornecedor']}")
-                st.write(f"**Status Final:** Concluído | **Cliente:** {con.get('cliente', 'Cliente')}")
-                if not med_ctt.empty:
-                    rel = itens_con.merge(med_ctt, on='item_id', how='left')
-                    st.table(pd.DataFrame({'Item': rel['descricao_item'], 'VLR UNIT': rel['vlr_unit'].apply(formatar_real), 'Med % Final': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Med R$ Final': rel['valor_acumulado'].apply(formatar_real)}))
-                    st.info(f"Valor Líquido Final no momento do arquivamento: {formatar_real(v_bruto - v_ret)}")
-
-# --- 10. CONTRATOS ---
+# --- 10. CONTRATOS (IMPORTAÇÃO PDF) ---
 elif escolha == "Contratos":
     st.title("📄 Cadastro de Contratos")
+    with st.expander("📥 Importar Dados de PDF (Padrão CTT)"):
+        uploaded_file = st.file_uploader("Arraste o PDF aqui", type="pdf")
+        if uploaded_file and st.button("Ler PDF"):
+            st.session_state['pdf_data'] = extrair_dados_ctt(uploaded_file)
+            st.success("Dados extraídos!")
+    
+    pdf_info = st.session_state.get('pdf_data', {})
     with st.form("f_con", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        cl = c1.text_input("Cliente"); ctr = c2.text_input("CTR")
-        fo = c1.text_input("Fornecedor"); ctt = c2.text_input("CTT")
-        gs = c1.text_input("Gestor"); vl = c2.number_input("Valor Total")
+        cl = c1.text_input("Cliente", value=pdf_info.get("cliente", ""))
+        ctr = c2.text_input("CTR", value=pdf_info.get("ctt", ""))
+        fo = c1.text_input("Fornecedor", value=pdf_info.get("fornecedor", ""))
+        ctt = c2.text_input("CTT", value=pdf_info.get("ctt", ""))
+        gs = c1.text_input("Gestor")
+        vl = c2.number_input("Valor Total", value=safe_float(pdf_info.get("valor_total", 0.0)))
         dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
-        if st.form_submit_button("Salvar"):
-            if salvar_dados_otimizado("contracts", {"contract_id": str(uuid.uuid4()), "cliente": cl, "ctr": ctr, "fornecedor": fo, "ctt": ctt, "gestor": gs, "valor_contrato": vl, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"}):
+        if st.form_submit_button("Salvar Contrato e Itens"):
+            new_cid = str(uuid.uuid4())
+            if salvar_dados_otimizado("contracts", {"contract_id": new_cid, "cliente": cl, "ctr": ctr, "fornecedor": fo, "ctt": ctt, "gestor": gs, "valor_contrato": vl, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"}):
+                for item in pdf_info.get("itens", []):
+                    salvar_dados_otimizado("items", {"item_id": str(uuid.uuid4()), "contract_id": new_cid, "descricao_item": item["desc"], "vlr_unit": item["valor"], "data_fim_item": str(dt_f)})
+                if 'pdf_data' in st.session_state: del st.session_state['pdf_data']
                 st.rerun()
