@@ -115,7 +115,27 @@ if escolha == "Dashboard":
             df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
             df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
         t_con = pd.to_numeric(df_c['valor_contrato'], errors='coerce').fillna(0).sum()
-        t_med = df_m_last[df_m_last['item_id'].isin(df_i[df_i['contract_id'].isin(df_c['contract_id'])]['item_id'])]['valor_acumulado'].apply(safe_float).sum() if not df_m_last.empty else 0
+
+        t_med = 0
+        
+        if (
+            not df_m_last.empty and
+            not df_i.empty and
+            'contract_id' in df_i.columns and
+            'item_id' in df_i.columns and
+            'item_id' in df_m_last.columns
+        ):
+            itens_validos = df_i[
+                df_i['contract_id'].isin(df_c['contract_id'])
+            ]['item_id']
+        
+            t_med = (
+                df_m_last[
+                    df_m_last['item_id'].isin(itens_validos)
+                ]['valor_acumulado']
+                .apply(safe_float)
+                .sum()
+            )
         m1, m2, m3 = st.columns(3)
         m1.metric("Total Contratado", formatar_real(t_con))
         m2.metric("Total Medido", formatar_real(t_med))
