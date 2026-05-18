@@ -8,7 +8,22 @@ import re
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÕES ---
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+MAPA_TABELAS = {
+    "contracts": "medicao_contracts",
+    "items": "medicao_items",
+    "measurements": "medicao_measurements"
+}
+
+MAPA_ACOES = {
+    "get_contracts": "medicao_contracts",
+    "get_items": "medicao_items",
+    "get_measurements": "medicao_measurements"
+}
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
 
