@@ -100,13 +100,41 @@ def formatar_data_br(data_str):
     except: return str(data_str)
 
 def salvar_dados_otimizado(tabela, dados, acao="create", id_field=None, id_value=None):
-    payload = {"token": TOKEN, "table": tabela, "data": dados, "action": acao, "id_field": id_field, "id_value": id_value}
-    with st.spinner('Sincronizando...'):
+    tabela_supabase = MAPA_TABELAS.get(tabela)
+
+    if not tabela_supabase:
+        st.error(f"Tabela não mapeada: {tabela}")
+        return False
+
+    with st.spinner("Sincronizando com Supabase..."):
         try:
-            r = requests.post(URL_DO_APPS_SCRIPT, json=payload, timeout=15)
-            st.cache_data.clear() 
+            if acao == "create":
+                supabase.table(tabela_supabase).insert(dados).execute()
+
+            elif acao == "update":
+                if not id_field or id_value is None:
+                    st.error("Update sem campo de ID.")
+                    return False
+
+                supabase.table(tabela_supabase).update(dados).eq(id_field, id_value).execute()
+
+            elif acao == "delete":
+                if not id_field or id_value is None:
+                    st.error("Delete sem campo de ID.")
+                    return False
+
+                supabase.table(tabela_supabase).delete().eq(id_field, id_value).execute()
+
+            else:
+                st.error(f"Ação desconhecida: {acao}")
+                return False
+
+            st.cache_data.clear()
             return True
-        except: return False
+
+        except Exception as e:
+            st.error(f"Erro ao salvar no Supabase: {e}")
+            return False
 
 def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
     try:
