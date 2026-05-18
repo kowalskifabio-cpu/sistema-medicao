@@ -213,7 +213,7 @@ if escolha == "Dashboard":
             df_f = df_c
         else:
             df_f = df_c[df_c["gestor"].astype(str).str.strip() == gestor_sel]
-        df_f = df_c if gestor_sel == "Todos" else df_c[df_c['gestor'] == gestor_sel]
+       
         for _, con in df_f.iterrows():
             cid = con['contract_id']
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
