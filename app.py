@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import requests
+from supabase import create_client
 import uuid
 import io
 import pdfplumber
