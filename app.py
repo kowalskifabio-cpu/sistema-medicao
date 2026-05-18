@@ -71,9 +71,18 @@ st.markdown("""
 @st.cache_data(ttl=300)
 def carregar_dados(acao):
     try:
-        r = requests.get(URL_DO_APPS_SCRIPT, params={"token": TOKEN, "action": acao}, timeout=10)
-        return pd.DataFrame(r.json()) if r.status_code == 200 else pd.DataFrame()
-    except: return pd.DataFrame()
+        tabela = MAPA_ACOES.get(acao)
+
+        if not tabela:
+            st.error(f"Ação não mapeada: {acao}")
+            return pd.DataFrame()
+
+        res = supabase.table(tabela).select("*").execute()
+        return pd.DataFrame(res.data or [])
+
+    except Exception as e:
+        st.error(f"Erro ao carregar dados do Supabase: {e}")
+        return pd.DataFrame()
 
 def safe_float(valor):
     try:
