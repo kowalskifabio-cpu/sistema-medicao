@@ -158,6 +158,10 @@ escolha = st.sidebar.selectbox("Ir para:", menu)
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle (Ativos)")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
+    st.write("DEBUG contratos:", df_c.shape)
+    st.write("DEBUG colunas contratos:", df_c.columns.tolist())
+    st.write("DEBUG status contratos:", df_c["status"].unique().tolist() if "status" in df_c.columns else "sem coluna status")
+    st.dataframe(df_c.head(10))
     if not df_c.empty:
         df_c = df_c[df_c['status'] == 'Ativo']
     if not df_c.empty:
