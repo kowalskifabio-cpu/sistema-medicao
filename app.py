@@ -396,9 +396,26 @@ elif escolha == "Relatório":
             })
         
             st.table(df_relatorio)
-        
+            totais = pd.DataFrame({
+                "Resumo": [
+                    "Total Medido Bruto",
+                    "Retenção Contratual (15%)",
+                    "Total Líquido",
+                    "Saldo do Contrato"
+                ],
+                "Valor": [
+                    formatar_real(v_bruto),
+                    f"- {formatar_real(v_ret)}",
+                    formatar_real(v_liq),
+                    formatar_real(saldo)
+                ]
+            })
+            
+            st.markdown("### Resumo Financeiro")
+            st.table(totais)
+            
             st.divider()
-        
+              
             c1, c2 = st.columns(2)
         
             with c1:
