@@ -193,7 +193,26 @@ if escolha == "Dashboard":
         m2.metric("Total Medido", formatar_real(t_med))
         m3.metric("Saldo Geral", formatar_real(t_con - t_med))
         st.divider()
-        gestor_sel = st.selectbox("Filtrar por Gestor", ["Todos"] + sorted(df_c['gestor'].unique().tolist()))
+        gestores = (
+            df_c["gestor"]
+            .fillna("Sem gestor")
+            .astype(str)
+            .str.strip()
+        )
+        
+        gestores = sorted([g for g in gestores.unique().tolist() if g != ""])
+        
+        gestor_sel = st.selectbox(
+            "Filtrar por Gestor",
+            ["Todos"] + gestores
+        )
+        
+        if gestor_sel == "Sem gestor":
+            df_f = df_c[df_c["gestor"].isna() | (df_c["gestor"].astype(str).str.strip() == "")]
+        elif gestor_sel == "Todos":
+            df_f = df_c
+        else:
+            df_f = df_c[df_c["gestor"].astype(str).str.strip() == gestor_sel]
         df_f = df_c if gestor_sel == "Todos" else df_c[df_c['gestor'] == gestor_sel]
         for _, con in df_f.iterrows():
             cid = con['contract_id']
