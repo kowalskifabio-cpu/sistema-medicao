@@ -26,7 +26,50 @@ MAPA_ACOES = {
 }
 
 st.set_page_config(page_title="Gestão de Medições Pro", layout="wide")
+# --- LOGIN ---
+if "usuario_logado" not in st.session_state:
+    st.session_state.usuario_logado = None
 
+def autenticar(usuario, senha):
+    try:
+        r = (
+            supabase.table("usuarios")
+            .select("*")
+            .eq("usuario", usuario)
+            .eq("senha", senha)
+            .eq("ativo", True)
+            .execute()
+        )
+
+        if r.data:
+            return r.data[0]
+
+        return None
+
+    except Exception as e:
+        st.error(f"Erro login: {e}")
+        return None
+
+
+if st.session_state.usuario_logado is None:
+
+    st.title("🔐 Acesso Sistema de Medição")
+
+    usuario = st.text_input("Usuário")
+    senha = st.text_input("Senha", type="password")
+
+    if st.button("Entrar", use_container_width=True):
+
+        user = autenticar(usuario, senha)
+
+        if user:
+            st.session_state.usuario_logado = user
+            st.rerun()
+
+        else:
+            st.error("Usuário ou senha inválidos")
+
+    st.stop()
 # --- FUNÇÃO DE LEITURA DE PDF (Extração Inteligente) ---
 def extrair_dados_ctt(pdf_file):
     dados = {"itens": []}
