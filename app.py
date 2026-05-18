@@ -193,6 +193,19 @@ def calcular_status_prazo_texto(data_fim, data_medicao, percentual):
     except: return "Sem dados", "⚪"
 
 # --- 3. MENU LATERAL ---
+st.sidebar.success(
+    f"👤 {st.session_state.usuario_logado['nome']}"
+)
+
+st.sidebar.caption(
+    st.session_state.usuario_logado["papel"]
+)
+
+if st.sidebar.button("🚪 Sair"):
+
+    st.session_state.usuario_logado = None
+    st.rerun()
+
 st.sidebar.title("Navegação")
 menu = ["Dashboard", "Contratos", "Itens", "Lançar Medição", "Kanban", "Relatório", "📁 CTRs Concluídas"]
 escolha = st.sidebar.selectbox("Ir para:", menu)
