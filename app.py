@@ -361,20 +361,74 @@ elif escolha == "Relatório":
         itens_con = df_i[df_i['contract_id'] == con['contract_id']]
         med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
         
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🖨️ Imprimir", use_container_width=True): st.components.v1.html("<script>window.print();</script>", height=0)
-        with c2:
-            if not med_ctt.empty:
-                rel_ex = itens_con.merge(med_ctt, on='item_id', how='left')
-                v_bruto = rel_ex['valor_acumulado'].apply(safe_float).sum(); v_ret = v_bruto * 0.15; v_liq = v_bruto - v_ret
+        if med_ctt.empty:
+            st.info("Este contrato ainda não possui medições lançadas.")
+        else:
+            rel_ex = itens_con.merge(med_ctt, on="item_id", how="left")
+        
+            v_bruto = rel_ex["valor_acumulado"].apply(safe_float).sum()
+            v_ret = v_bruto * 0.15
+            v_liq = v_bruto - v_ret
+            saldo = safe_float(con["valor_contrato"]) - v_bruto
+        
+            st.markdown("## BOLETIM DE MEDIÇÃO")
+            st.markdown(f"**CTT:** {con.get('ctt', '-')}")
+            st.markdown(f"**CTR/Obra:** {con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}")
+            st.markdown(f"**Fornecedor:** {con.get('fornecedor', '-')}")
+            st.markdown(f"**Gestor:** {con.get('gestor', '-')}")
+            st.markdown(f"**Data do relatório:** {datetime.now().strftime('%d/%m/%Y')}")
+        
+            st.divider()
+        
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Valor Contrato", formatar_real(con["valor_contrato"]))
+            r2.metric("Bruto Medido", formatar_real(v_bruto))
+            r3.metric("Líquido 85%", formatar_real(v_liq))
+            r4.metric("Saldo", formatar_real(saldo))
+        
+            st.divider()
+        
+            df_relatorio = pd.DataFrame({
+                "Item": rel_ex["descricao_item"],
+                "Valor Unitário": rel_ex["vlr_unit"].apply(formatar_real),
+                "% Medido": rel_ex["percentual_acumulado"].apply(lambda x: f"{safe_float(x) * 100:.2f}%"),
+                "Valor Medido": rel_ex["valor_acumulado"].apply(formatar_real),
+            })
+        
+            st.table(df_relatorio)
+        
+            st.divider()
+        
+            c1, c2 = st.columns(2)
+        
+            with c1:
+                if st.button("🖨️ Imprimir / Salvar em PDF", use_container_width=True):
+                    st.components.v1.html("<script>window.print();</script>", height=0)
+        
+            with c2:
                 output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_header = pd.DataFrame([["BOLETIM", ""], ["Obra:", f"{con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}"], ["Data:", datetime.now().strftime('%d/%m/%Y')]])
-                    df_header.to_excel(writer, index=False, header=False, sheet_name='Boletim')
-                    df_items_ex = pd.DataFrame({'Item': rel_ex['descricao_item'], 'Vlr Unit': rel_ex['vlr_unit'].apply(safe_float), 'Med %': rel_ex['percentual_acumulado'].apply(safe_float), 'Med R$': rel_ex['valor_acumulado'].apply(safe_float)})
-                    df_items_ex.to_excel(writer, index=False, startrow=len(df_header), sheet_name='Boletim')
-                st.download_button(label="📥 Excel", data=output.getvalue(), file_name=f"Boletim_{con['ctt']}.xlsx", use_container_width=True)
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    df_header = pd.DataFrame([
+                        ["BOLETIM", ""],
+                        ["CTT:", con.get("ctt", "-")],
+                        ["Obra:", f"{con.get('ctr', '-')} - {con.get('cliente', 'Cliente')}"],
+                        ["Fornecedor:", con.get("fornecedor", "-")],
+                        ["Data:", datetime.now().strftime("%d/%m/%Y")],
+                        ["Bruto Medido:", v_bruto],
+                        ["Retenção 15%:", v_ret],
+                        ["Líquido:", v_liq],
+                        ["Saldo:", saldo],
+                    ])
+        
+                    df_header.to_excel(writer, index=False, header=False, sheet_name="Boletim")
+                    df_relatorio.to_excel(writer, index=False, startrow=len(df_header) + 2, sheet_name="Boletim")
+        
+                st.download_button(
+                    label="📥 Baixar Excel",
+                    data=output.getvalue(),
+                    file_name=f"Boletim_{con['ctt']}.xlsx",
+                    use_container_width=True
+                )
 
 # --- 9. CTRs CONCLUÍDAS (FUNÇÃO DE REABERTURA) ---
 elif escolha == "📁 CTRs Concluídas":
