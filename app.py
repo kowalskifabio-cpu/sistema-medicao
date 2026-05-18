@@ -77,7 +77,7 @@ def carregar_dados(acao):
             st.error(f"Ação não mapeada: {acao}")
             return pd.DataFrame()
 
-        res = supabase.table(tabela).select("*").limit(5).execute()
+        res = supabase.table(tabela).select("*").execute()
         st.write("DEBUG tabela consultada:", tabela)
         st.write("DEBUG retorno bruto:", res.data)
         return pd.DataFrame(res.data or [])
