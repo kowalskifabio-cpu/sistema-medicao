@@ -218,7 +218,41 @@ if escolha == "Dashboard":
             cid = con['contract_id']
             itens_con = df_i[df_i['contract_id']==cid] if not df_i.empty else pd.DataFrame()
             med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'].tolist())] if not df_m_last.empty and not itens_con.empty else pd.DataFrame()
-            farol = "🟡" if med_ctt.empty else ("🔴" if any((pd.to_datetime(r.get('data_fim_item', con['data_fim'])).date() - datetime.now().date()).days < 0 and safe_float(r['percentual_acumulado']) < 1 for _, r in med_ctt.merge(itens_con, on='item_id').iterrows()) else "🟢")
+            farol = "🟡"
+
+            if not med_ctt.empty:
+            
+                atrasado = False
+            
+                rel_farol = med_ctt.merge(
+                    itens_con,
+                    on="item_id",
+                    how="left"
+                )
+            
+                for _, r in rel_farol.iterrows():
+            
+                    data_ref = r.get("data_fim_item")
+            
+                    if pd.isna(data_ref):
+                        data_ref = con.get("data_fim")
+            
+                    try:
+                        dias = (
+                            pd.to_datetime(data_ref).date()
+                            - datetime.now().date()
+                        ).days
+            
+                        if dias < 0 and safe_float(
+                            r["percentual_acumulado"]
+                        ) < 1:
+                            atrasado = True
+                            break
+            
+                    except:
+                        pass
+            
+                farol = "🔴" if atrasado else "🟢"
             v_bruto = med_ctt['valor_acumulado'].apply(safe_float).sum() if not med_ctt.empty else 0
             with st.container(border=True):
                 st.markdown(f"#### {farol} {con.get('cliente', 'Cliente')} (CTR: {con.get('ctr', '-')}) | {con['fornecedor']} (CTT: {con['ctt']})")
