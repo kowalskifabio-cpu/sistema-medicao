@@ -78,8 +78,6 @@ def carregar_dados(acao):
             return pd.DataFrame()
 
         res = supabase.table(tabela).select("*").execute()
-        st.write("DEBUG tabela consultada:", tabela)
-        st.write("DEBUG retorno bruto:", res.data)
         return pd.DataFrame(res.data or [])
 
     except Exception as e:
