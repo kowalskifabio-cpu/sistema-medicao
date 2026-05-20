@@ -382,6 +382,13 @@ elif escolha == "Itens":
 elif escolha == "Lançar Medição":
     st.title("📏 Lançamento de Medição")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
+    st.error("""
+    ⚠️ ATENÇÃO — VALIDAÇÃO OBRIGATÓRIA
+    
+    Somente devem ser lançadas medições conferidas presencialmente pelo Gestor no local de execução do serviço.
+    
+    Medições informadas exclusivamente pelo terceiro, sem vistoria in loco do Gestor responsável, não serão aceitas nem aprovadas para pagamento.
+    """)
     if not df_c.empty:
         df_c = df_c[df_c['status'] == 'Ativo']
         if not df_c.empty:
