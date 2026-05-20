@@ -583,9 +583,39 @@ elif escolha == "📁 CTRs Concluídas":
                 df_m_last = df_m.sort_values('updated_at').groupby('item_id').tail(1)
             itens_con = df_i[df_i['contract_id'] == con['contract_id']]
             med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
-            if not med_ctt.empty:
-                rel = itens_con.merge(med_ctt, on='item_id', how='left')
-                st.table(pd.DataFrame({'Item': rel['descricao_item'], 'Med % Final': rel['percentual_acumulado'].apply(lambda x: f"{safe_float(x)*100:.2f}%"), 'Med R$ Final': rel['valor_acumulado'].apply(formatar_real)}))
+            if itens_con.empty:
+                st.info("Esta CTR concluída não possui itens cadastrados.")
+            else:
+                if med_ctt.empty:
+                    rel = itens_con.copy()
+                    rel["percentual_acumulado"] = 0
+                    rel["valor_acumulado"] = 0
+                else:
+                    rel = itens_con.merge(med_ctt, on="item_id", how="left")
+                    rel["percentual_acumulado"] = rel["percentual_acumulado"].fillna(0)
+                    rel["valor_acumulado"] = rel["valor_acumulado"].fillna(0)
+            
+                v_bruto_final = rel["valor_acumulado"].apply(safe_float).sum()
+                v_ret_final = v_bruto_final * 0.15
+                v_liq_final = v_bruto_final - v_ret_final
+                saldo_final = safe_float(con.get("valor_contrato", 0)) - v_bruto_final
+            
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Bruto Medido", formatar_real(v_bruto_final))
+                c2.metric("Retenção 15%", f"- {formatar_real(v_ret_final)}")
+                c3.metric("Líquido", formatar_real(v_liq_final))
+                c4.metric("Saldo", formatar_real(saldo_final))
+            
+                st.divider()
+            
+                st.subheader("📋 Itens da CTR")
+            
+                st.table(pd.DataFrame({
+                    "Item": rel["descricao_item"],
+                    "Valor Unitário": rel["vlr_unit"].apply(formatar_real),
+                    "% Final": rel["percentual_acumulado"].apply(lambda x: f"{safe_float(x) * 100:.2f}%"),
+                    "Medido Final": rel["valor_acumulado"].apply(formatar_real)
+                }))
 
 # --- 10. CONTRATOS (IMPORTAÇÃO PDF) ---
 elif escolha == "Contratos":
