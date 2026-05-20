@@ -565,6 +565,18 @@ elif escolha == "📁 CTRs Concluídas":
                     st.rerun()
             st.divider()
 
+            st.subheader("📌 Resumo da CTR Concluída")
+
+            st.markdown(f"**CTT:** {con.get('ctt', '-')}")
+            st.markdown(f"**CTR/Obra:** {con.get('ctr', '-')}")
+            st.markdown(f"**Fornecedor:** {con.get('fornecedor', '-')}")
+            st.markdown(f"**Gestor:** {con.get('gestor', '-')}")
+            st.markdown(f"**Valor do Contrato:** {formatar_real(con.get('valor_contrato', 0))}")
+            st.markdown(f"**Data Início:** {formatar_data_br(con.get('data_inicio', ''))}")
+            st.markdown(f"**Data Fim:** {formatar_data_br(con.get('data_fim', ''))}")
+            
+            st.divider()
+            
             df_m_last = pd.DataFrame()
             if not df_m.empty:
                 df_m['updated_at'] = pd.to_datetime(df_m['updated_at'], errors='coerce')
