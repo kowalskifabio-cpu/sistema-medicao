@@ -213,6 +213,13 @@ escolha = st.sidebar.selectbox("Ir para:", menu)
 # --- 4. DASHBOARD ---
 if escolha == "Dashboard":
     st.title("📊 Painel de Controle (Ativos)")
+    st.warning("""
+    ⚠️ REGRA OBRIGATÓRIA PARA MEDIÇÕES
+    
+    Não serão aceitas para pagamento medições realizadas sem vistoria presencial do Gestor no local de execução do serviço do terceiro.
+    
+    Medições informadas apenas pelo terceiro, sem validação in loco pelo Gestor responsável, serão automaticamente desconsideradas para fins de aprovação e pagamento.
+    """)
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     
     if not df_c.empty:
