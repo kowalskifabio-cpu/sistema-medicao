@@ -343,7 +343,24 @@ elif escolha == "Itens":
                     if st.form_submit_button("Salvar Item"):
                         if salvar_dados_otimizado("items", {"item_id": str(uuid.uuid4()), "contract_id": row_ctt['contract_id'], "descricao_item": desc, "vlr_unit": v_u, "data_fim_item": str(dt)}): st.rerun()
             if not df_i.empty:
-                i_f = df_i[df_i['contract_id'] == row_ctt['contract_id']]
+                i_f = df_i[df_i['contract_id'] == row_ctt['contract_id']].copy()
+
+                total_itens = i_f["vlr_unit"].apply(safe_float).sum() if not i_f.empty else 0
+                valor_contrato = safe_float(row_ctt.get("valor_contrato", 0))
+                diferenca = valor_contrato - total_itens
+                
+                c_total1, c_total2, c_total3 = st.columns(3)
+                c_total1.metric("Valor do Contrato", formatar_real(valor_contrato))
+                c_total2.metric("Soma dos Itens", formatar_real(total_itens))
+                c_total3.metric("Diferença", formatar_real(diferenca))
+                
+                if abs(diferenca) > 0.01:
+                    st.warning("A soma dos itens ainda não bate com o valor total do contrato.")
+                else:
+                    st.success("A soma dos itens confere com o valor total do contrato.")
+                
+                st.divider()
+                
                 for _, item in i_f.iterrows():
                     with st.container(border=True):
                         c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
