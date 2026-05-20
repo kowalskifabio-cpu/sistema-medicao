@@ -536,6 +536,42 @@ elif escolha == "📁 CTRs Concluídas":
 # --- 10. CONTRATOS (IMPORTAÇÃO PDF) ---
 elif escolha == "Contratos":
     st.title("📄 Cadastro de Contratos")
+    st.subheader("✏️ Corrigir Gestor do Contrato")
+
+    df_c_edit = carregar_dados("get_contracts")
+
+    if df_c_edit.empty:
+        st.info("Nenhum contrato cadastrado.")
+    else:
+        df_c_edit["label_edicao"] = df_c_edit.apply(
+            lambda x: f"CTT {x.get('ctt', '-')} | CTR {x.get('ctr', '-')} | {x.get('fornecedor', '-')} | Gestor atual: {x.get('gestor', '-')}",
+            axis=1
+        )
+
+        contrato_edit = st.selectbox(
+            "Selecione o contrato para corrigir",
+            df_c_edit["label_edicao"].tolist()
+        )
+
+        linha_edit = df_c_edit[df_c_edit["label_edicao"] == contrato_edit].iloc[0]
+
+        novo_gestor = st.text_input(
+            "Novo gestor",
+            value=str(linha_edit.get("gestor") or "")
+        )
+
+        if st.button("💾 Atualizar Gestor", use_container_width=True):
+            if salvar_dados_otimizado(
+                "contracts",
+                {"gestor": novo_gestor},
+                "update",
+                "contract_id",
+                linha_edit["contract_id"]
+            ):
+                st.success("Gestor atualizado com sucesso.")
+                st.rerun()
+
+    st.divider()
     with st.expander("📥 Importar Dados de PDF (Padrão CTT)"):
         uploaded_file = st.file_uploader("Arraste o PDF aqui", type="pdf")
         if uploaded_file and st.button("Ler PDF"):
