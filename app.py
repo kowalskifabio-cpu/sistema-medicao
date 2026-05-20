@@ -533,12 +533,29 @@ elif escolha == "📁 CTRs Concluídas":
     st.title("📂 Histórico de CTRs Concluídas")
     df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
     if not df_c.empty:
-        df_done = df_c[df_c['status'] == 'Concluído']
-        if df_done.empty: st.info("Nenhuma CTR concluída.")
+        df_done = df_c[df_c["status"] == "Concluído"].copy()
+
+        if df_done.empty:
+            st.info("Nenhuma CTR concluída.")
         else:
-            sel_hist = st.selectbox("Selecione para visualizar ou REABRIR", df_done['ctt'].tolist())
-            con = df_done[df_done['ctt'] == sel_hist].iloc[0]
-            cid = con['contract_id']
+            df_done["label_hist"] = df_done.apply(
+                lambda x: f"CTT {x.get('ctt') or 'Sem CTT'} | CTR {x.get('ctr') or '-'} | {x.get('fornecedor') or '-'}",
+                axis=1
+            )
+        
+            sel_hist = st.selectbox(
+                "Selecione para visualizar ou REABRIR",
+                df_done["label_hist"].tolist()
+            )
+        
+            linha_sel = df_done[df_done["label_hist"] == sel_hist]
+        
+            if linha_sel.empty:
+                st.warning("Não foi possível localizar este contrato. Verifique CTT/CTR em branco.")
+                st.stop()
+        
+            con = linha_sel.iloc[0]
+            cid = con["contract_id"]
             
             # BLOCO DE REABERTURA
             st.warning("⚠️ Deseja reativar esta CTR para novos lançamentos?")
