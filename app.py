@@ -417,10 +417,18 @@ elif escolha == "Relatório":
         itens_con = df_i[df_i['contract_id'] == con['contract_id']]
         med_ctt = df_m_last[df_m_last['item_id'].isin(itens_con['item_id'])] if not df_m_last.empty else pd.DataFrame()
         
-        if med_ctt.empty:
-            st.info("Este contrato ainda não possui medições lançadas.")
+        if itens_con.empty:
+            st.info("Este contrato ainda não possui itens cadastrados.")
         else:
-            rel_ex = itens_con.merge(med_ctt, on="item_id", how="left")
+            if med_ctt.empty:
+                rel_ex = itens_con.copy()
+                rel_ex["percentual_acumulado"] = 0
+                rel_ex["valor_acumulado"] = 0
+                st.warning("Relatório prévio gerado sem medições lançadas. Percentuais iniciados em 0%.")
+            else:
+                rel_ex = itens_con.merge(med_ctt, on="item_id", how="left")
+                rel_ex["percentual_acumulado"] = rel_ex["percentual_acumulado"].fillna(0)
+                rel_ex["valor_acumulado"] = rel_ex["valor_acumulado"].fillna(0)
         
             v_bruto = rel_ex["valor_acumulado"].apply(safe_float).sum()
             v_ret = v_bruto * 0.15
