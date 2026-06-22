@@ -125,7 +125,7 @@ def carregar_dados(acao):
 
     except Exception as e:
         st.error(f"Erro ao carregar dados do Supabase: {e}")
-        return pd.DataFrame()
+        st.stop()
 
 def safe_float(valor):
     try:
