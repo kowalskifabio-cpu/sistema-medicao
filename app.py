@@ -394,7 +394,17 @@ elif escolha == "Lançar Medição":
         if not df_c.empty:
             c_sel = st.selectbox("Selecione Contrato", df_c['ctt'].tolist())
             id_c = df_c[df_c['ctt'] == c_sel]['contract_id'].values[0]
+
+            if df_i.empty or "contract_id" not in df_i.columns:
+                st.error("Não foi possível carregar os itens deste contrato. Atualize a página e tente novamente.")
+                st.stop()
+            
             i_f = df_i[df_i['contract_id'] == id_c].copy()
+            
+            if i_f.empty:
+                st.warning("Este contrato não possui itens cadastrados para medição.")
+                st.stop()
+            
             if not i_f.empty:
                 i_sel = st.selectbox("Item", i_f['descricao_item'].tolist())
                 row = i_f[i_f['descricao_item'] == i_sel].iloc[0]
