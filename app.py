@@ -73,28 +73,137 @@ if st.session_state.usuario_logado is None:
 # --- FUNÇÃO DE LEITURA DE PDF (Extração Inteligente) ---
 def extrair_dados_ctt(pdf_file):
     dados = {"itens": []}
+
     with pdfplumber.open(pdf_file) as pdf:
         texto_completo = ""
+
         for page in pdf.pages:
-            texto_completo += page.extract_text() + "\n"
-        
-        ctt_match = re.search(r'Número:\s*"?(\d+)', texto_completo)
-        cliente_match = re.search(r'STATUS\s+MARCENARIA', texto_completo)
-        fornecedor_match = re.search(r'Nome:\s*\n\n(.*?)\n\nCONTRATADO', texto_completo, re.DOTALL)
-        
-        if ctt_match: dados["ctt"] = ctt_match.group(1)
-        if cliente_match: dados["cliente"] = "STATUS MARCENARIA"
-        if fornecedor_match: dados["fornecedor"] = fornecedor_match.group(1).strip()
-        
-        item_regex = r"ITEM\s+\d+[- ]+(.*?)\s*-\s*R\$\s*([\d.,]+)"
-        itens_encontrados = re.findall(item_regex, texto_completo)
-        
+            texto_pagina = page.extract_text() or ""
+            texto_completo += texto_pagina + "\n"
+
+        # -------------------------
+        # CTT / Número da contratação
+        # -------------------------
+        ctt_match = re.search(
+            r'Número:\s*"?(\d+)',
+            texto_completo,
+            re.IGNORECASE
+        )
+
+        if ctt_match:
+            dados["ctt"] = ctt_match.group(1).strip()
+
+        # -------------------------
+        # CLIENTE / CONTRATANTE
+        # -------------------------
+        cliente_match = re.search(
+            r'CONTRATANTE\s+Nome:\s*(.*?)\s+CPF/CNPJ:',
+            texto_completo,
+            re.IGNORECASE | re.DOTALL
+        )
+
+        if cliente_match:
+            dados["cliente"] = cliente_match.group(1).strip()
+        elif re.search(r'STATUS\s+MARCENARIA', texto_completo, re.IGNORECASE):
+            dados["cliente"] = "STATUS MARCENARIA"
+
+        # -------------------------
+        # FORNECEDOR / CONTRATADO
+        # -------------------------
+        fornecedor_match = re.search(
+            r'CONTRATADO\s+Nome:\s*(.*?)\s+CPF/CNPJ:',
+            texto_completo,
+            re.IGNORECASE | re.DOTALL
+        )
+
+        if fornecedor_match:
+            dados["fornecedor"] = fornecedor_match.group(1).strip()
+
+        # -------------------------
+        # CTR
+        # Tenta primeiro "CTR:"
+        # -------------------------
+        ctr_match = re.search(
+            r'\bCTR:\s*([0-9]+/[0-9]{4})',
+            texto_completo,
+            re.IGNORECASE
+        )
+
+        # Segunda opção: Centro de Custo
+        if not ctr_match:
+            ctr_match = re.search(
+                r'Centro\s+de\s+Custo:\s*([0-9]+/[0-9]{4})',
+                texto_completo,
+                re.IGNORECASE
+            )
+
+        if ctr_match:
+            dados["ctr"] = ctr_match.group(1).strip()
+
+        # -------------------------
+        # DATAS DA OBRA
+        # -------------------------
+        inicio_match = re.search(
+            r'DATA\s+ENTRADA\s+OBRA:\s*(\d{2}/\d{2}/\d{4})',
+            texto_completo,
+            re.IGNORECASE
+        )
+
+        fim_match = re.search(
+            r'DATA\s+ENTREGA\s+OBRA:\s*(\d{2}/\d{2}/\d{4})',
+            texto_completo,
+            re.IGNORECASE
+        )
+
+        if inicio_match:
+            try:
+                dados["data_inicio"] = datetime.strptime(
+                    inicio_match.group(1),
+                    "%d/%m/%Y"
+                ).date()
+            except:
+                pass
+
+        if fim_match:
+            try:
+                dados["data_fim"] = datetime.strptime(
+                    fim_match.group(1),
+                    "%d/%m/%Y"
+                ).date()
+            except:
+                pass
+
+        # -------------------------
+        # ITENS
+        # -------------------------
+        item_regex = r"ITEM\s+\d+\s*-\s*(.*?)\s*-\s*R\$\s*([\d.,]+)"
+
+        itens_encontrados = re.findall(
+            item_regex,
+            texto_completo,
+            re.IGNORECASE
+        )
+
         valor_total = 0.0
+
         for desc, valor in itens_encontrados:
-            v_float = float(valor.replace('.', '').replace(',', '.'))
-            dados["itens"].append({"desc": desc.strip(), "valor": v_float})
+
+            try:
+                v_float = float(
+                    valor.replace(".", "").replace(",", ".")
+                )
+            except:
+                v_float = 0.0
+
+            dados["itens"].append({
+                "desc": desc.strip(),
+                "valor": v_float
+            })
+
             valor_total += v_float
+
         dados["valor_total"] = valor_total
+
     return dados
 
 # --- CSS PARA ALINHAMENTO E IMPRESSÃO ---
