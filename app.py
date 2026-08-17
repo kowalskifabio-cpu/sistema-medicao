@@ -804,7 +804,15 @@ elif escolha == "Contratos":
         ctt = c2.text_input("CTT", value=pdf_info.get("ctt", ""))
         gs = c1.text_input("Gestor")
         vl = c2.number_input("Valor Total", value=safe_float(pdf_info.get("valor_total", 0.0)))
-        dt_i = st.date_input("Início"); dt_f = st.date_input("Fim")
+        dt_i = st.date_input(
+            "Início",
+            value=pdf_info.get("data_inicio", datetime.now().date())
+        )
+        
+        dt_f = st.date_input(
+            "Fim",
+            value=pdf_info.get("data_fim", datetime.now().date())
+        )
         if st.form_submit_button("Salvar Contrato e Itens"):
             new_cid = str(uuid.uuid4())
             if salvar_dados_otimizado("contracts", {"contract_id": new_cid, "cliente": cl, "ctr": ctr, "fornecedor": fo, "ctt": ctt, "gestor": gs, "valor_contrato": vl, "data_inicio": str(dt_i), "data_fim": str(dt_f), "status": "Ativo"}):
