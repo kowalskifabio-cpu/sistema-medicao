@@ -799,7 +799,7 @@ elif escolha == "Contratos":
     with st.form("f_con", clear_on_submit=True):
         c1, c2 = st.columns(2)
         cl = c1.text_input("Cliente", value=pdf_info.get("cliente", ""))
-        ctr = c2.text_input("CTR", value=pdf_info.get("ctt", ""))
+        ctr = c2.text_input("CTR", value=pdf_info.get("ctr", ""))
         fo = c1.text_input("Fornecedor", value=pdf_info.get("fornecedor", ""))
         ctt = c2.text_input("CTT", value=pdf_info.get("ctt", ""))
         gs = c1.text_input("Gestor")
