@@ -81,9 +81,7 @@ def extrair_dados_ctt(pdf_file):
             texto_pagina = page.extract_text() or ""
             texto_completo += texto_pagina + "\n"
 
-        # -------------------------
-        # CTT / Número da contratação
-        # -------------------------
+        # CTT / número da contratação
         ctt_match = re.search(
             r'Número:\s*"?(\d+)',
             texto_completo,
@@ -93,23 +91,44 @@ def extrair_dados_ctt(pdf_file):
         if ctt_match:
             dados["ctt"] = ctt_match.group(1).strip()
 
-        # -------------------------
-        # CLIENTE / CONTRATANTE
-        # -------------------------
-        cliente_match = re.search(
-            r'CONTRATANTE\s+Nome:\s*(.*?)\s+CPF/CNPJ:',
+        # CTR + Cliente/Obra
+        ctr_cliente_match = re.search(
+            r'\bCTR:\s*([0-9]+/[0-9]{4})\s*-\s*([^\n\r]+)',
             texto_completo,
-            re.IGNORECASE | re.DOTALL
+            re.IGNORECASE
         )
 
-        if cliente_match:
-            dados["cliente"] = cliente_match.group(1).strip()
-        elif re.search(r'STATUS\s+MARCENARIA', texto_completo, re.IGNORECASE):
-            dados["cliente"] = "STATUS MARCENARIA"
+        # Segunda fonte: Centro de Custo
+        centro_custo_match = re.search(
+            r'Centro\s+de\s+Custo:\s*([0-9]+/[0-9]{4})\s*-\s*([^\n\r]+)',
+            texto_completo,
+            re.IGNORECASE
+        )
 
-        # -------------------------
-        # FORNECEDOR / CONTRATADO
-        # -------------------------
+        if ctr_cliente_match:
+            dados["ctr"] = ctr_cliente_match.group(1).strip()
+            dados["cliente"] = ctr_cliente_match.group(2).strip()
+
+        elif centro_custo_match:
+            dados["ctr"] = centro_custo_match.group(1).strip()
+            dados["cliente"] = centro_custo_match.group(2).strip()
+
+        # Conferência entre CTR e Centro de Custo
+        if ctr_cliente_match and centro_custo_match:
+            ctr_1 = ctr_cliente_match.group(1).strip()
+            cliente_1 = ctr_cliente_match.group(2).strip()
+
+            ctr_2 = centro_custo_match.group(1).strip()
+            cliente_2 = centro_custo_match.group(2).strip()
+
+            if ctr_1 != ctr_2 or cliente_1.upper() != cliente_2.upper():
+                dados["alerta_ctr"] = (
+                    f"Divergência encontrada no PDF: "
+                    f"CTR = {ctr_1} - {cliente_1} | "
+                    f"Centro de Custo = {ctr_2} - {cliente_2}"
+                )
+
+        # Fornecedor / contratado
         fornecedor_match = re.search(
             r'CONTRATADO\s+Nome:\s*(.*?)\s+CPF/CNPJ:',
             texto_completo,
@@ -119,30 +138,7 @@ def extrair_dados_ctt(pdf_file):
         if fornecedor_match:
             dados["fornecedor"] = fornecedor_match.group(1).strip()
 
-        # -------------------------
-        # CTR
-        # Tenta primeiro "CTR:"
-        # -------------------------
-        ctr_match = re.search(
-            r'\bCTR:\s*([0-9]+/[0-9]{4})',
-            texto_completo,
-            re.IGNORECASE
-        )
-
-        # Segunda opção: Centro de Custo
-        if not ctr_match:
-            ctr_match = re.search(
-                r'Centro\s+de\s+Custo:\s*([0-9]+/[0-9]{4})',
-                texto_completo,
-                re.IGNORECASE
-            )
-
-        if ctr_match:
-            dados["ctr"] = ctr_match.group(1).strip()
-
-        # -------------------------
-        # DATAS DA OBRA
-        # -------------------------
+        # Datas da obra
         inicio_match = re.search(
             r'DATA\s+ENTRADA\s+OBRA:\s*(\d{2}/\d{2}/\d{4})',
             texto_completo,
@@ -173,9 +169,7 @@ def extrair_dados_ctt(pdf_file):
             except:
                 pass
 
-        # -------------------------
-        # ITENS
-        # -------------------------
+        # Itens
         item_regex = r"ITEM\s+\d+\s*-\s*(.*?)\s*-\s*R\$\s*([\d.,]+)"
 
         itens_encontrados = re.findall(
@@ -187,7 +181,6 @@ def extrair_dados_ctt(pdf_file):
         valor_total = 0.0
 
         for desc, valor in itens_encontrados:
-
             try:
                 v_float = float(
                     valor.replace(".", "").replace(",", ".")
