@@ -593,33 +593,13 @@ elif escolha == "Lançar Medição":
     # --------------------------------------------------
     percentual_atual = 0.0
 
-    if not df_m.empty and "item_id" in df_m.columns:
-
-        med_item = df_m[
-            df_m["item_id"] == item_id
-        ].copy()
-
-        if not med_item.empty:
-
-            med_item["updated_at"] = pd.to_datetime(
-                med_item["updated_at"],
-                errors="coerce"
-            )
-
-            med_item = med_item.sort_values(
-                "updated_at",
-                na_position="first"
-            )
-
-            ultima_medicao = med_item.iloc[-1]
-
-            percentual_atual = safe_float(
-                ultima_medicao.get(
-                    "percentual_acumulado",
-                    0
-                )
-            )
-
+    ultima_medicao = buscar_ultima_medicao(item_id)
+    
+    if ultima_medicao:
+        percentual_atual = safe_float(
+            ultima_medicao.get("percentual_acumulado", 0)
+        )
+        
     st.info(
         f"Medição acumulada atual deste item: "
         f"{percentual_atual * 100:.0f}%"
