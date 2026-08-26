@@ -222,8 +222,42 @@ def carregar_dados(acao):
             st.error(f"Ação não mapeada: {acao}")
             return pd.DataFrame()
 
-        res = supabase.table(tabela).select("*").execute()
-        return pd.DataFrame(res.data or [])
+        # Medições podem ultrapassar o limite de 1.000 registros do Supabase.
+        # Por isso carregamos em blocos.
+        if tabela == "medicao_measurements":
+            todos_dados = []
+            inicio = 0
+            tamanho_lote = 1000
+
+            while True:
+                fim = inicio + tamanho_lote - 1
+
+                resposta = (
+                    supabase
+                    .table(tabela)
+                    .select("*")
+                    .range(inicio, fim)
+                    .execute()
+                )
+
+                lote = resposta.data or []
+
+                if not lote:
+                    break
+
+                todos_dados.extend(lote)
+
+                if len(lote) < tamanho_lote:
+                    break
+
+                inicio += tamanho_lote
+
+            return pd.DataFrame(todos_dados)
+
+        # Contracts e items ainda são pequenos e podem ser carregados normalmente
+        resposta = supabase.table(tabela).select("*").execute()
+
+        return pd.DataFrame(resposta.data or [])
 
     except Exception as e:
         st.error(f"Erro ao carregar dados do Supabase: {e}")
