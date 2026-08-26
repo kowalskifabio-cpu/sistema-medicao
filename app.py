@@ -483,40 +483,205 @@ elif escolha == "Itens":
 # --- 6. MEDIÇÃO ---
 elif escolha == "Lançar Medição":
     st.title("📏 Lançamento de Medição")
-    df_c = carregar_dados("get_contracts"); df_i = carregar_dados("get_items"); df_m = carregar_dados("get_measurements")
+
     st.error("""
     ⚠️ ATENÇÃO — VALIDAÇÃO OBRIGATÓRIA
-    
+
     Somente devem ser lançadas medições conferidas presencialmente pelo Gestor no local de execução do serviço.
-    
+
     Medições informadas exclusivamente pelo terceiro, sem vistoria in loco do Gestor responsável, não serão aceitas nem aprovadas para pagamento.
     """)
-    if not df_c.empty:
-        df_c = df_c[df_c['status'] == 'Ativo']
-        if not df_c.empty:
-            c_sel = st.selectbox("Selecione Contrato", df_c['ctt'].tolist())
-            id_c = df_c[df_c['ctt'] == c_sel]['contract_id'].values[0]
 
-            if df_i.empty or "contract_id" not in df_i.columns:
-                st.error("Não foi possível carregar os itens deste contrato. Atualize a página e tente novamente.")
-                st.stop()
-            
-            i_f = df_i[df_i['contract_id'] == id_c].copy()
-            
-            if i_f.empty:
-                st.warning("Este contrato não possui itens cadastrados para medição.")
-                st.stop()
-            
-            if not i_f.empty:
-                i_sel = st.selectbox("Item", i_f['descricao_item'].tolist())
-                row = i_f[i_f['descricao_item'] == i_sel].iloc[0]
-                p_a = safe_float(df_m[df_m['item_id'] == row['item_id']].sort_values('updated_at').iloc[-1]['percentual_acumulado']) if not df_m.empty and not df_m[df_m['item_id'] == row['item_id']].empty else 0.0
-                with st.form("f_m", clear_on_submit=True):
-                    p = st.slider("%", 0, 100, int(p_a * 100)) / 100
-                    dt = st.date_input("Data", format="DD/MM/YYYY")
-                    fase = st.selectbox("Fase", ["Em execução", "Medição lançada", "Aprovado", "Faturado"])
-                    if st.form_submit_button("Registrar"):
-                        if salvar_dados_otimizado("measurements", {"measurement_id": str(uuid.uuid4()), "item_id": row['item_id'], "data_medicao": str(dt), "percentual_acumulado": p, "valor_acumulado": p * safe_float(row['vlr_unit']), "fase_workflow": fase, "updated_at": str(datetime.now())}): st.rerun()
+    df_c = carregar_dados("get_contracts")
+    df_i = carregar_dados("get_items")
+    df_m = carregar_dados("get_measurements")
+
+    # Verifica se existem contratos
+    if df_c.empty:
+        st.warning("Nenhum contrato disponível.")
+        st.stop()
+
+    # Somente contratos ativos
+    df_c = df_c[df_c["status"] == "Ativo"].copy()
+
+    if df_c.empty:
+        st.warning("Nenhum contrato ativo disponível para medição.")
+        st.stop()
+
+    # Cria uma descrição mais clara para selecionar o contrato
+    df_c["label_medicao"] = df_c.apply(
+        lambda x: (
+            f"CTT {x.get('ctt', '-')} | "
+            f"CTR {x.get('ctr', '-')} | "
+            f"{x.get('cliente', '-')}"
+        ),
+        axis=1
+    )
+
+    contrato_selecionado = st.selectbox(
+        "Selecione o Contrato",
+        df_c["label_medicao"].tolist()
+    )
+
+    con = df_c[
+        df_c["label_medicao"] == contrato_selecionado
+    ].iloc[0]
+
+    id_c = con["contract_id"]
+
+    # Verifica itens
+    if df_i.empty or "contract_id" not in df_i.columns:
+        st.error(
+            "Não foi possível carregar os itens deste contrato. "
+            "Atualize a página e tente novamente."
+        )
+        st.stop()
+
+    i_f = df_i[
+        df_i["contract_id"] == id_c
+    ].copy()
+
+    if i_f.empty:
+        st.warning(
+            "Este contrato não possui itens cadastrados para medição."
+        )
+        st.stop()
+
+    # Seleção do item
+    i_f["label_item"] = i_f.apply(
+        lambda x: (
+            f"{x.get('descricao_item', '-')} | "
+            f"{formatar_real(x.get('vlr_unit', 0))}"
+        ),
+        axis=1
+    )
+
+    item_selecionado = st.selectbox(
+        "Item",
+        i_f["label_item"].tolist()
+    )
+
+    row = i_f[
+        i_f["label_item"] == item_selecionado
+    ].iloc[0]
+
+    item_id = row["item_id"]
+
+    # --------------------------------------------------
+    # BUSCA CORRETA DA ÚLTIMA MEDIÇÃO DO ITEM
+    # --------------------------------------------------
+    percentual_atual = 0.0
+
+    if not df_m.empty and "item_id" in df_m.columns:
+
+        med_item = df_m[
+            df_m["item_id"] == item_id
+        ].copy()
+
+        if not med_item.empty:
+
+            med_item["updated_at"] = pd.to_datetime(
+                med_item["updated_at"],
+                errors="coerce"
+            )
+
+            med_item = med_item.sort_values(
+                "updated_at",
+                na_position="first"
+            )
+
+            ultima_medicao = med_item.iloc[-1]
+
+            percentual_atual = safe_float(
+                ultima_medicao.get(
+                    "percentual_acumulado",
+                    0
+                )
+            )
+
+    st.info(
+        f"Medição acumulada atual deste item: "
+        f"{percentual_atual * 100:.0f}%"
+    )
+
+    # --------------------------------------------------
+    # FORMULÁRIO
+    # --------------------------------------------------
+    with st.form("f_m"):
+
+        percentual_novo = st.slider(
+            "Percentual acumulado da medição",
+            min_value=0,
+            max_value=100,
+            value=int(round(percentual_atual * 100))
+        )
+
+        p = percentual_novo / 100
+
+        dt = st.date_input(
+            "Data",
+            format="DD/MM/YYYY"
+        )
+
+        fase = st.selectbox(
+            "Fase",
+            [
+                "Em execução",
+                "Medição lançada",
+                "Aprovado",
+                "Faturado"
+            ]
+        )
+
+        valor_medicao = (
+            p * safe_float(row["vlr_unit"])
+        )
+
+        st.write(
+            f"**Valor acumulado deste item:** "
+            f"{formatar_real(valor_medicao)}"
+        )
+
+        registrar = st.form_submit_button(
+            "💾 Registrar Medição",
+            use_container_width=True
+        )
+
+    # --------------------------------------------------
+    # GRAVAÇÃO
+    # --------------------------------------------------
+    if registrar:
+
+        dados_medicao = {
+            "measurement_id": str(uuid.uuid4()),
+            "item_id": item_id,
+            "data_medicao": str(dt),
+            "percentual_acumulado": p,
+            "valor_acumulado": valor_medicao,
+            "fase_workflow": fase,
+            "updated_at": datetime.now().isoformat()
+        }
+
+        gravou = salvar_dados_otimizado(
+            "measurements",
+            dados_medicao
+        )
+
+        if gravou:
+            st.cache_data.clear()
+
+            st.success(
+                f"Medição registrada com sucesso: "
+                f"{percentual_novo}% — "
+                f"{formatar_real(valor_medicao)}"
+            )
+
+            st.rerun()
+        else:
+            st.error(
+                "A medição não foi gravada. "
+                "Verifique a mensagem de erro acima."
+            )
 
 # --- 7. KANBAN ---
 elif escolha == "Kanban":
