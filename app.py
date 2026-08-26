@@ -384,19 +384,20 @@ if escolha == "Dashboard":
     if not df_c.empty:
         df_m_last = pd.DataFrame()
 
-        if not df_i.empty:
+        if not df_m.empty:
         
-            ultimas_medicoes = []
+            df_m["updated_at"] = pd.to_datetime(
+                df_m["updated_at"],
+                errors="coerce"
+            )
         
-            for item_id in df_i["item_id"].dropna().unique():
-        
-                ultima = buscar_ultima_medicao(item_id)
-        
-                if ultima:
-                    ultimas_medicoes.append(ultima)
-        
-            if ultimas_medicoes:
-                df_m_last = pd.DataFrame(ultimas_medicoes)
+            df_m_last = (
+                df_m
+                .sort_values("updated_at")
+                .groupby("item_id")
+                .tail(1)
+                .copy()
+            )
         t_con = pd.to_numeric(df_c['valor_contrato'], errors='coerce').fillna(0).sum()
 
         t_med = 0
