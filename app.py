@@ -228,7 +228,28 @@ def carregar_dados(acao):
     except Exception as e:
         st.error(f"Erro ao carregar dados do Supabase: {e}")
         st.stop()
+        
+def buscar_ultima_medicao(item_id):
+    try:
+        resposta = (
+            supabase
+            .table("medicao_measurements")
+            .select("*")
+            .eq("item_id", item_id)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
 
+        if resposta.data:
+            return resposta.data[0]
+
+        return None
+
+    except Exception as e:
+        st.error(f"Erro ao buscar última medição: {e}")
+        return None
+        
 def safe_float(valor):
     try:
         if pd.isna(valor) or valor == "": return 0.0
